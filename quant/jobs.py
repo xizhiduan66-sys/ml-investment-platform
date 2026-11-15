@@ -1,0 +1,119 @@
+"""Durable research queue. All state transitions use SQLite transactions."""
+import json
+import time
+import uuid
+from datetime import datetime, timezone
+from . import storage, runs
+
+SCHEMA = '''CREATE TABLE IF NOT EXISTS research_jobs (
+ id TEXT PRIMARY KEY, run_id TEXT NOT NULL UNIQUE,
+ status TEXT NOT NULL, worker_id TEXT, heartbeat REAL,
+ created_at REAL NOT NULL, finished_at REAL, error TEXT
+)'''
+
+
+def initialize():
+    with storage.connect() as db:
+        db.execute(SCHEMA)
+        if 'experiment_id' in [r[1] for r in db.execute('PRAGMA table_info(research_jobs)')]:
+            db.execute('ALTER TABLE research_jobs RENAME COLUMN experiment_id TO run_id')
+        db.execute('CREATE INDEX IF NOT EXISTS research_jobs_queue ON research_jobs(status, created_at)')
+        db.execute('BEGIN IMMEDIATE')
+        runs.migrate(db)
+
+
+def enqueue(experiment):
+    initialize()
+    record = dict(experiment)
+    record.setdefault('created_at', datetime.now(timezone.utc).isoformat())
+    job_id = uuid.uuid4().hex
+    record['job_id'] = job_id
+    with storage.connect() as db:
+        db.execute('BEGIN IMMEDIATE')
+        count = db.execute("SELECT count(*) FROM research_jobs WHERE status IN ('queued','running')").fetchone()[0]
+        if count >= 4:
+            raise ValueError('运行队列已满，请等待当前任务完成')
+        frozen = {k: v for k, v in record.items() if k not in ('status', 'message', 'summary', 'job_id')}
+        runs.insert(db, 'experiment', frozen)
+        execution = runs.create(db, frozen)
+        db.execute('INSERT INTO research_jobs(id,run_id,status,created_at) VALUES (?,?,?,?)',
+                   (job_id, execution['id'], 'queued', time.time()))
+
+    return runs.project(frozen)
+
+
+def claim(worker_id):
+    with storage.connect() as db:
+        db.execute('BEGIN IMMEDIATE')
+        row = db.execute("SELECT id,run_id FROM research_jobs WHERE status='queued' ORDER BY created_at,id LIMIT 1").fetchone()
+        if row is None:
+            return None
+        db.execute("UPDATE research_jobs SET status='running',worker_id=?,heartbeat=? WHERE id=?",
+                   (worker_id, time.time(), row[0]))
+        return {'id': row[0], 'run_id': row[1]}
+
+
+def heartbeat(job_id, worker_id):
+    with storage.connect() as db:
+        db.execute("UPDATE research_jobs SET heartbeat=? WHERE id=? AND worker_id=? AND status='running'",
+                   (time.time(), job_id, worker_id))
+
+
+def finish(job, worker_id, error=None):
+    with storage.connect() as db:
+        db.execute('BEGIN IMMEDIATE')
+        row = db.execute("SELECT body FROM objects WHERE kind='run' AND id=?", (job['run_id'],)).fetchone()
+        record = json.loads(row[0]) if row else None
+        succeeded = record is not None and record['status'] == 'completed' and error is None
+        message = None if succeeded else error or (record or {}).get('message', '实验记录不存在')
+        if record and not succeeded:
+            record.update(status='failed', message=message)
+            db.execute('UPDATE objects SET body=? WHERE id=?', (json.dumps(record, ensure_ascii=False), record['id']))
+        db.execute("UPDATE research_jobs SET status=?,finished_at=?,error=? WHERE id=? AND worker_id=? AND status='running'",
+                   ('succeeded' if succeeded else 'failed', time.time(), message, job['id'], worker_id))
+
+
+def recover_exclusive():
+    """Only call while holding the worker process lock; never steal a live worker's job."""
+    initialize()
+    with storage.connect() as db:
+        db.execute('BEGIN IMMEDIATE')
+        rows = db.execute("SELECT id,body FROM objects WHERE kind='run'").fetchall()
+        for experiment_id, body in rows:
+            record = json.loads(body)
+            job = db.execute('SELECT id,status FROM research_jobs WHERE run_id=?', (experiment_id,)).fetchone()
+            if job and job[1] == 'running':
+                succeeded = record['status'] == 'completed'
+                message = None if succeeded else 'Worker 中断，可复制配置重新运行'
+                db.execute('UPDATE research_jobs SET status=?,finished_at=?,error=? WHERE id=?',
+                           ('succeeded' if succeeded else 'failed', time.time(), message, job[0]))
+                if not succeeded:
+                    record.update(status='failed', message=message)
+            elif not job and record['status'] == 'queued':
+                job_id = uuid.uuid4().hex
+                record['job_id'] = job_id
+                db.execute('INSERT INTO research_jobs(id,run_id,status,created_at) VALUES (?,?,?,?)',
+                           (job_id, experiment_id, 'queued', time.time()))
+            elif not job and record['status'] == 'running':
+                record.update(status='failed', message='旧版进程内任务已中断，可复制配置重新运行')
+            else:
+                continue
+            db.execute('UPDATE objects SET body=? WHERE id=?', (json.dumps(record, ensure_ascii=False), experiment_id))
+
+
+def retry(experiment_id):
+    initialize()
+    with storage.connect() as db:
+        db.execute('BEGIN IMMEDIATE')
+        row = db.execute("SELECT body FROM objects WHERE kind='experiment' AND id=?", (experiment_id,)).fetchone()
+        if not row:
+            raise ValueError('实验不存在')
+        definition = json.loads(row[0])
+        if definition.get('status') == 'deleting':
+            raise ValueError('实验正在删除')
+        if db.execute("SELECT count(*) FROM research_jobs WHERE status IN ('queued','running')").fetchone()[0] >= 4:
+            raise ValueError('运行队列已满')
+        run = runs.create(db, definition)
+        db.execute('INSERT INTO research_jobs(id,run_id,status,created_at) VALUES (?,?,?,?)',
+                   (uuid.uuid4().hex, run['id'], 'queued', time.time()))
+    return run
