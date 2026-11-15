@@ -10,6 +10,12 @@ def dependency_available(name):
     if not name:
         return True
     try:
+        if name in ('lightgbm', 'xgboost'):
+            from .native_runtime import prepare_openmp
+            try:
+                prepare_openmp()
+            except OSError:
+                pass  # A separately installed system runtime may still work.
         import_module(name)
         return True
     except Exception:  # Optional native runtimes may raise their own load-error classes.

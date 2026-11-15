@@ -14,6 +14,20 @@ with urllib.request.urlopen('http://127.0.0.1:8776/api/catalog', timeout=15) as 
     catalog = json.load(response)
 if any(e['status'] == 'running' for e in catalog['experiments']):
     raise SystemExit('当前仍有实验执行，未停止服务')
+pid_file = folder / 'service-pids.json'
+if pid_file.exists():
+    for name, pid in json.loads(pid_file.read_text()).items():
+        if name == 'api':
+            continue
+        info = subprocess.run(['ps', '-p', str(pid), '-o', 'command='], capture_output=True, text=True).stdout
+        if '-m quant.worker' not in info:
+            continue
+        os.kill(pid, signal.SIGTERM)
+        for _ in range(100):
+            try: os.kill(pid, 0)
+            except ProcessLookupError: break
+            time.sleep(.1)
+        else: raise SystemExit('Worker 尚未退出，未重启 API')
 os.kill(old, signal.SIGTERM)
 for _ in range(100):
     try: os.kill(old, 0)

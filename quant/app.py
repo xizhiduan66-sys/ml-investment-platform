@@ -103,6 +103,8 @@ class ExperimentIn(BaseModel):
     model_params: Dict[str, Any] = Field(default_factory=dict)
     lookback: int = Field(default=30, ge=3, le=120)
     epochs: int = Field(default=10, ge=1, le=100)
+    submission_key: Optional[str] = Field(default=None, max_length=128)
+    auto_backtest: bool = True
     diagnostic_runs: int = Field(default=1, ge=1, le=3)
     cost_bps: float = Field(default=5, ge=0, le=100)
     entry_threshold: float = Field(default=0, ge=0, le=.5)
@@ -159,6 +161,9 @@ def catalog():
         'families': factors.families(),
         'factor_sets': storage.all_of('factor_set'),
         'targets': targets.catalog(),
+        'task_templates': [{'id': mode + ':' + t['id'], 'target_id': t['id'], 'sample_mode': mode,
+                            'name': ('事件 · ' if mode == 'chan_event' else '') + t['name']}
+                           for t in targets.catalog() for mode in t['sample_modes']],
         'models': models.registry(),
         'chan_event': {'features': [feature for feature in features if feature['scope'] == 'event'],
                        'version': chan_events.VERSION,
@@ -166,6 +171,41 @@ def catalog():
         'backtests': storage.all_of('backtest'),
         'experiments': storage.all_of('experiment'),
     }
+
+
+@app.get('/api/workers')
+def worker_status():
+    import fcntl
+    result = {}
+    for queue in ('research', 'market'):
+        with (storage.ROOT / f'{queue}-worker.lock').open('a') as lock:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                fcntl.flock(lock, fcntl.LOCK_UN)
+                online = False
+            except BlockingIOError:
+                online = True
+        result[queue] = {'online': online}
+    return result
+
+
+class PreflightIn(BaseModel):
+    model: str
+    sample_mode: str
+    target_id: str
+    target_params: Dict[str, Any] = Field(default_factory=dict)
+    model_params: Dict[str, Any] = Field(default_factory=dict)
+    factor_ids: List[str] = Field(min_length=1, max_length=30)
+
+
+@app.post('/api/research/preflight')
+def research_preflight(inp: PreflightIn):
+    target = targets.get(inp.target_id, None, inp.target_params)
+    records = feature_records(inp.factor_ids)
+    if inp.sample_mode == 'bar' and any(factors.resolve(record)[0].scope == 'event' for record in records):
+        raise ValueError('事件特征需要事件采样')
+    manifest = factors.build_manifest(records)
+    return {'plan': planning.compile_plan(inp.model_dump(), target), 'manifest': manifest.to_dict()}
 
 
 @app.get('/api/chan-events/{dataset_id}')
@@ -593,6 +633,12 @@ def label_preview(dataset_id: str, target_id: str):
 
 @app.post('/api/experiments')
 def create_experiment(inp: ExperimentIn):
+    if inp.submission_key:
+        jobs.initialize()
+        with storage.connect() as db:
+            prior = db.execute('SELECT experiment_id FROM submission_keys WHERE key=?', (inp.submission_key,)).fetchone()
+        if prior:
+            return storage.get('experiment', prior[0])
     if inp.sample_mode not in ('bar', 'chan_event'):
         raise ValueError('未知采样模式')
     event_mode = inp.sample_mode == 'chan_event'
@@ -638,8 +684,6 @@ def create_experiment(inp: ExperimentIn):
         if event_features:
             names = '、'.join(event_features)
             raise ValueError(f'「{names}」需要缠论买卖点，请取消选择或使用事件采样')
-    if sum(e['status'] in ['queued', 'running'] for e in storage.all_of('experiment')) >= 4:
-        raise ValueError('运行队列已满，请等待当前任务完成')
     manifest = factors.build_manifest(factor_records)
     if factor_set and factor_set.get('manifest_hash') not in (None, manifest.hash):
         raise ValueError('因子集清单已变化，请重新保存因子集')
@@ -696,6 +740,8 @@ def create_experiment(inp: ExperimentIn):
     except Exception:
         private_file.unlink(missing_ok=True)
         raise
+    if exp['id'] != experiment_id:
+        private_file.unlink(missing_ok=True)
     return exp
 
 
@@ -711,6 +757,7 @@ def experiment(experiment_id: str):
 
 @app.delete('/api/experiments/{experiment_id}')
 def delete_experiment(experiment_id: str):
+    jobs.initialize()
     if not experiment_id or any(char not in '0123456789abcdef' for char in experiment_id):
         raise HTTPException(404, '实验不存在')
     with storage.connect() as con:
@@ -742,6 +789,7 @@ def delete_experiment(experiment_id: str):
             con.execute('DELETE FROM research_jobs WHERE run_id=?', (execution['id'],))
             con.execute("DELETE FROM objects WHERE kind='run' AND id=?", (execution['id'],))
         con.execute("DELETE FROM objects WHERE kind='experiment' AND id=?", (experiment_id,))
+        con.execute('DELETE FROM submission_keys WHERE experiment_id=?', (experiment_id,))
     return {'ok': True}
 
 

@@ -188,6 +188,9 @@ def run(experiment_id):
                 event.update(annotated.get(event['event_id'], {}))
             result.update(kind='chan_event', event_report=report, rows=[events[i] for i in test],
                           trades=[], policy='事件在首次可见时取样，按所选目标成熟时间确定标签。事件预测用于模型诊断。')
+        elif not config.get('auto_backtest', True):
+            result.update(kind='prediction_only', rows=[r for r in prediction_rows if r['split'] == 'test'],
+                          trades=[], policy='仅生成预测与模型诊断，可独立配置回测。')
         else:
             # Carry an explicit zero position over isolated missing-feature bars.
             all_test = np.arange(test[0], test[-1] + 1)

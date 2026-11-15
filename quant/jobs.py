@@ -15,6 +15,7 @@ SCHEMA = '''CREATE TABLE IF NOT EXISTS research_jobs (
 def initialize():
     with storage.connect() as db:
         db.execute(SCHEMA)
+        db.execute('CREATE TABLE IF NOT EXISTS submission_keys (key TEXT PRIMARY KEY, experiment_id TEXT NOT NULL)')
         if 'experiment_id' in [r[1] for r in db.execute('PRAGMA table_info(research_jobs)')]:
             db.execute('ALTER TABLE research_jobs RENAME COLUMN experiment_id TO run_id')
         db.execute('CREATE INDEX IF NOT EXISTS research_jobs_queue ON research_jobs(status, created_at)')
@@ -30,11 +31,18 @@ def enqueue(experiment):
     record['job_id'] = job_id
     with storage.connect() as db:
         db.execute('BEGIN IMMEDIATE')
+        key = record.get('snapshot', {}).get('config', {}).get('submission_key')
+        if key:
+            prior = db.execute('SELECT experiment_id FROM submission_keys WHERE key=?', (key,)).fetchone()
+            if prior:
+                return storage.get('experiment', prior[0])
         count = db.execute("SELECT count(*) FROM research_jobs WHERE status IN ('queued','running')").fetchone()[0]
         if count >= 4:
             raise ValueError('运行队列已满，请等待当前任务完成')
         frozen = {k: v for k, v in record.items() if k not in ('status', 'message', 'summary', 'job_id')}
         runs.insert(db, 'experiment', frozen)
+        if key:
+            db.execute('INSERT INTO submission_keys VALUES (?,?)', (key, frozen['id']))
         execution = runs.create(db, frozen)
         db.execute('INSERT INTO research_jobs(id,run_id,status,created_at) VALUES (?,?,?,?)',
                    (job_id, execution['id'], 'queued', time.time()))
