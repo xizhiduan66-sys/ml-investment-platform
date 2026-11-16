@@ -63,3 +63,10 @@ def recover_exclusive():
                     record.update(status='failed', message='行情 Worker 中断，可继续同步')
                     db.execute('UPDATE objects SET body=? WHERE id=?', (json.dumps(record),identifier))
                 db.execute('UPDATE market_queue SET status=? WHERE id=?', (record['status'],identifier))
+
+
+def counts():
+    """行情队列各状态的条数，供 /api/status 轮询使用。"""
+    with storage.connect() as db:
+        return {status: n for status, n in
+                db.execute('SELECT status, count(*) FROM market_queue GROUP BY status')}

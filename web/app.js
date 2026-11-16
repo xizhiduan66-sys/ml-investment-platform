@@ -993,14 +993,26 @@ document.addEventListener('submit',async ev=>{
 $('#dialog').addEventListener('cancel',ev=>{if($('#modal-form')?.dataset.busy)ev.preventDefault()});
 window.addEventListener('keydown',ev=>{if(['Enter',' '].includes(ev.key)&&ev.target.matches('article[data-factor]')){ev.preventDefault();ev.target.click()}});
 await render().catch(e=>{$('#app').innerHTML=`<div class="empty"><b>无法连接研究引擎</b>${esc(e.message)}<br>${button('重新连接','retry',true)}</div>`});
+// 状态轮询只拿轻量状态板，命中时按 id 就地更新已有目录，不整份重拉 catalog。
+function applyStatus(items){
+  const byId=new Map(items.map(item=>[item.id,item]));let changed=false;
+  for(const e of catalog.experiments){
+    const s=byId.get(e.id);if(!s)continue;
+    if(s.status!=null&&s.status!==e.status){e.status=s.status;changed=true}
+    else if(s.message!=null&&s.message!==e.message){e.message=s.message;changed=true}
+    if(s.summary!=null)e.summary=s.summary;
+  }
+  return changed;
+}
 poll=setInterval(async()=>{
-  if(pollBusy||document.hidden||$('#dialog').open||(!detail&&!catalog?.experiments.some(e=>['running','queued'].includes(e.status))))return;
+  if(pollBusy||document.hidden||$('#dialog').open||!catalog||(!detail&&!catalog.experiments.some(e=>['running','queued'].includes(e.status))))return;
   pollBusy=true;const version=renderVersion;
   try{
-    const next=await api('/catalog');if(version!==renderVersion)return;
-    const state=items=>JSON.stringify(items.map(e=>[e.id,e.status,e.message]));
-    const changed=state(next.experiments)!==state(catalog.experiments);
-    applyCatalog(next);
+    const next=await api('/status');if(version!==renderVersion)return;
+    const ids=new Set(next.experiments.map(item=>item.id));
+    const sameSet=next.experiments.length===catalog.experiments.length&&catalog.experiments.every(e=>ids.has(e.id));
+    if(!sameSet){await render();return}
+    const changed=applyStatus(next.experiments);
     if(changed||detail){
       const target=pollTarget(page,detail);
       if(target==='view')await render({cached:true});

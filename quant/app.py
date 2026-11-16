@@ -7,7 +7,7 @@ from pathlib import Path
 from contextlib import asynccontextmanager
 from typing import Any, Dict, List, Optional
 import pandas as pd
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Request
+from fastapi import FastAPI, Header, HTTPException, Response, UploadFile, File, Form, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -139,8 +139,8 @@ def save_feature_settings(feature_id, **changes):
                     (feature_id, json.dumps(settings, ensure_ascii=False, allow_nan=False)))
 
 
-@app.get('/api/catalog')
 def catalog():
+    """目录内容（纯函数，保留给脚本直接调用）。"""
     features = registered_features().values()
     return {
         'datasets': [item for item in storage.all_of('dataset') if not item.get('archived')],
@@ -164,6 +164,16 @@ def catalog():
     }
 
 
+@app.get('/api/catalog')
+def catalog_route(if_none_match: Optional[str] = Header(default=None)):
+    """目录按修订号打 ETag：浏览器每次都重验证，内容未变时只回 304。"""
+    tag = f'W/"rev-{storage.revision()}"'
+    headers = {'ETag': tag, 'Cache-Control': 'no-cache'}
+    if if_none_match and if_none_match.strip() == tag:
+        return Response(status_code=304, headers=headers)
+    return JSONResponse(catalog(), headers=headers)
+
+
 @app.get('/api/workers')
 def worker_status():
     import fcntl
@@ -178,6 +188,14 @@ def worker_status():
                 online = True
         result[queue] = {'online': online}
     return result
+
+
+@app.get('/api/status')
+def status():
+    """轮询用的轻量状态：实验状态板 + 队列计数（不加载任何实验快照）。"""
+    jobs.initialize()
+    return {'revision': storage.revision(), 'experiments': runs.status_board(),
+            'queues': {'research': jobs.counts(), 'market': market_queue.counts()}}
 
 
 class PreflightIn(BaseModel):

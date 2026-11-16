@@ -141,3 +141,10 @@ def retry(experiment_id):
         db.execute('INSERT INTO research_jobs(id,run_id,status,created_at) VALUES (?,?,?,?)',
                    (uuid.uuid4().hex, run['id'], 'queued', time.time()))
     return run
+
+
+def counts():
+    """队列各状态的条数，供 /api/status 轮询使用。"""
+    with storage.connect() as db:
+        return {status: n for status, n in
+                db.execute('SELECT status, count(*) FROM research_jobs GROUP BY status')}

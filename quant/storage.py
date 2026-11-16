@@ -19,6 +19,15 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS objects (id TEXT PRIMARY KEY, kind TEXT, body TEXT);
 CREATE INDEX IF NOT EXISTS objects_kind ON objects(kind, id);
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value INTEGER NOT NULL);
+INSERT OR IGNORE INTO meta VALUES ('revision', 0);
+-- 任何一条对象写入都会自增修订号。触发器让 /api/catalog 的 ETag 失效成为
+-- 结构保证：不依赖每个写点记得调用某个函数（jobs/runs/app 里都有直接写 SQL 的地方）。
+CREATE TRIGGER IF NOT EXISTS objects_revision_insert AFTER INSERT ON objects
+BEGIN UPDATE meta SET value=value+1 WHERE key='revision'; END;
+CREATE TRIGGER IF NOT EXISTS objects_revision_update AFTER UPDATE ON objects
+BEGIN UPDATE meta SET value=value+1 WHERE key='revision'; END;
+CREATE TRIGGER IF NOT EXISTS objects_revision_delete AFTER DELETE ON objects
+BEGIN UPDATE meta SET value=value+1 WHERE key='revision'; END;
 """
 
 # 已建过表的数据目录。按 ROOT 记录，测试可以随时把 ROOT 指到新的临时目录。
@@ -61,10 +70,6 @@ def connect():
         con.close()
 
 
-def touch(con):
-    """标记一次语义写入。/api/catalog 的 ETag 依赖这个单调计数。"""
-    con.execute("INSERT INTO meta VALUES ('revision', 1) "
-                'ON CONFLICT(key) DO UPDATE SET value=value+1')
 
 
 def revision():
@@ -83,7 +88,6 @@ def save(kind, body):
     body.setdefault('created_at', datetime.now(timezone.utc).isoformat())
     with connect() as con:
         con.execute('INSERT INTO objects VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET kind=excluded.kind, body=excluded.body', (body['id'], kind, json.dumps(body, ensure_ascii=False, allow_nan=False)))
-        touch(con)
     return body
 
 
