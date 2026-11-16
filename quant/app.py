@@ -194,6 +194,7 @@ def worker_status():
 def status():
     """轮询用的轻量状态：实验状态板 + 队列计数（不加载任何实验快照）。"""
     jobs.initialize()
+    market_queue.initialize()
     return {'revision': storage.revision(), 'experiments': runs.status_board(),
             'queues': {'research': jobs.counts(), 'market': market_queue.counts()}}
 
