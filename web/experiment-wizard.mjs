@@ -61,7 +61,6 @@ export function mountExperimentWizard({catalog,inventory,copy,datasetId,factorId
   const copiedTargetId=targets.find(target=>target.id===c.target_id)?.id||
     targets.find(target=>target.kind==='forward_return'&&target.task===copiedTarget?.task)?.id;
   let eventMode=c.sample_mode==='chan_event';
-  const savedChoices={bar:{},event:{}};
   const datasets=[...catalog.datasets];
   const copiedDataset=copy?.snapshot.dataset;
   if(copiedDataset&&!datasets.some(d=>d.id===copiedDataset.id))datasets.push(copiedDataset);
@@ -391,16 +390,9 @@ export function mountExperimentWizard({catalog,inventory,copy,datasetId,factorId
     for(const el of form.querySelectorAll('[name=event_types]'))el.disabled=!eventMode;
     syncFeatures();
   }
-  q('#sample_mode').onchange=()=>{
-    savedChoices[eventMode?'event':'bar']={target:q('#target_id').value,model:q('#model').value};
-    eventMode=q('#sample_mode').value==='chan_event';
-    const saved=savedChoices[eventMode?'event':'bar'];
-    renderChoices(saved.target,saved.model);
-    syncMode();
-  };
   q('#wizard-symbol').onchange=()=>intervals();
   q('#wizard-interval').onchange=()=>snapshots();
-  q('#model').onchange=q('#target_id').onchange=renderParams;
+  q('#model').onchange=renderParams;
   q('#factor_set_id').onchange=syncFeatures;
   q('#wizard-feature-search').oninput=syncFeatures;
   form.addEventListener('input',ev=>{form.submissionKey=crypto.randomUUID();checkToken++;q('#plan-check').textContent='配置已变化，请重新检查';if(ev.target.name==='factor_ids'){ev.target.checked?selectedIds.add(ev.target.value):selectedIds.delete(ev.target.value)}summary()});

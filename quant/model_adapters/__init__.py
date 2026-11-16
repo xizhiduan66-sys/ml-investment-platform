@@ -93,9 +93,9 @@ def _schema(kind):
 
 def _register_builtins():
     from .catalog import entries
-    for item in entries({'torch': False, 'lightgbm': False, 'xgboost': False}):
+    for item in entries():
         kind, layout = item['id'], item['input']
-        metadata = {key: value for key, value in item.items() if key not in ('id', 'input', 'tasks', 'available')}
+        metadata = {key: value for key, value in item.items() if key not in ('id', 'input', 'tasks')}
         metadata.update(group='sequence' if layout == 'sequence' else 'tree', recommended=kind == 'lightgbm')
         register(ModelAdapter(kind, layout, tuple(item['tasks']),
                               'torch' if layout == 'sequence' else kind,

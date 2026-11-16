@@ -10,7 +10,7 @@ python3 -m venv .venv
 .venv/bin/python -m uvicorn quant.app:app --host 127.0.0.1 --port 8776
 ```
 
-打开 http://127.0.0.1:8765 ，API 文档 http://127.0.0.1:8765/docs 。仅用于本机，尚未提供登录、权限与多租户隔离。
+打开 http://127.0.0.1:8776 ，API 文档 http://127.0.0.1:8776/docs 。仅用于本机，尚未提供登录、权限与多租户隔离。
 
 安装后生成 `requirements.lock.txt` 保存当前环境的精确依赖版本。Apple Silicon 上的 LightGBM 可能需要系统 OpenMP；如导入失败，界面应显示不可用，其他模型是否可用以界面依赖检查为准。
 

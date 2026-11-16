@@ -8,11 +8,7 @@ import pandas as pd
 from . import storage, data, factors, models, backtest, evaluation, chan_events, splits, targets
 from . import planning, pipeline, policies, prediction_artifacts, runs
 from .contracts import PreparedDataset
-from .targets import STRUCTURE_CONFIRMATION, forward_labels as labels
-
-
-def split_indices(indices, n, horizon):
-    return split_samples(indices, n, np.arange(n) + horizon + 1)
+from .targets import STRUCTURE_CONFIRMATION
 
 
 def split_samples(indices, n, label_ends):

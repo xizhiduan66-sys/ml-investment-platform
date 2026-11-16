@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>序列 · 量化研究 Demo</title>
+  <link rel="stylesheet" href="./research-workbench.css">
+  <link rel="stylesheet" href="./research-workbench-demo.css">
+  <script defer src="../../web/vendor/lightweight-charts.standalone.production.js"></script>
+  <script defer src="./research-workbench-fixture.js"></script>
+  <script defer src="./research-workbench.js"></script>
+</head>
+<body>
+  <div id="layout">
+    <aside class="sidebar">
+      <a class="brand" href="#/experiments" aria-label="序列 · 返回实验中心">
+        <span class="brand-mark" data-icon="brand"></span>
+        <span>序列<small>QUANT RESEARCH</small></span>
+      </a>
+      <div class="workspace-label">工作空间</div>
+      <nav id="nav" aria-label="工作空间"></nav>
+      <div class="sidebar-bottom">
+        <span class="environment-icon" data-icon="server"></span>
+        <div><b>研究 Demo</b><small>合成行情 · 后端计算</small></div>
+      </div>
+    </aside>
+    <div class="shell">
+      <header class="topbar">
+        <div class="breadcrumbs"><span>研究空间</span><span data-icon="chevron"></span><strong id="crumb">实验中心</strong></div>
+        <div class="top-actions">
+          <span class="preview-context">合成行情示例</span>
+        </div>
+      </header>
+      <main id="app" tabindex="-1"><div class="loading">正在加载研究示例…</div></main>
+      <footer><span>序列 · 量化研究</span><span>示例数据只读</span></footer>
+    </div>
+  </div>
+</body>
+</html>

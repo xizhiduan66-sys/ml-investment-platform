@@ -6,8 +6,6 @@ def parameter(name, label, default, minimum, maximum, kind='float'):
 def schema(kind, task):
     if task not in ('regression', 'binary'):
         raise ValueError('不支持的学习任务')
-    if kind in ('linear', 'cnn_lstm'):
-        raise ValueError('该模型已移除，请重新选择 LightGBM、XGBoost、LSTM 或 GRU')
     if kind == 'lightgbm':
         return [parameter('n_estimators', '最大迭代轮数', 100, 10, 1000, 'int'),
                 parameter('max_depth', '最大树深', 4, 2, 16, 'int'),

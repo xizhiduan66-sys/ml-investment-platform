@@ -81,16 +81,3 @@ def preview_page(info, limit, before=None):
     content = b''.join(rows[-limit:])
     cursor = end - len(content)
     return pd.read_csv(io.BytesIO(header + content)), cursor if cursor > len(header) else None
-
-
-def seed():
-    if storage.all_of('dataset'):
-        return
-    rng = np.random.default_rng(42)
-    n = 1500
-    returns = rng.normal(0.0002, 0.012, n) + np.sin(np.arange(n) / 45) * 0.001
-    close = 100 * np.exp(np.cumsum(returns))
-    opens = np.r_[100, close[:-1]] * np.exp(rng.normal(0, .002, n))
-    spread = rng.uniform(.002, .018, n)
-    df = pd.DataFrame({'date': pd.bdate_range('2020-01-01', periods=n), 'open': opens, 'high': np.maximum(opens, close) * (1 + spread), 'low': np.minimum(opens, close) * (1 - spread), 'close': close, 'volume': rng.lognormal(14, .4, n)})
-    persist(df, 'DEMO · 合成日线', 'synthetic')

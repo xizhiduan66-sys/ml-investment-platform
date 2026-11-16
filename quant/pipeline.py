@@ -1,7 +1,7 @@
 """Shared model execution for bar and event research; no persistence or HTTP."""
 import numpy as np
 from . import models
-from .contracts import PreparedDataset, PredictionSet
+from .contracts import PredictionSet
 
 
 def train_and_predict(config, task, partitions, progress, seed=42):

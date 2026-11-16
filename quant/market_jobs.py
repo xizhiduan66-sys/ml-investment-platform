@@ -1,5 +1,4 @@
 """Resumable market imports with atomic publication of all candle levels."""
-import json
 import re
 import time
 

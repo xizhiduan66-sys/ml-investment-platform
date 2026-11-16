@@ -38,15 +38,6 @@ async def bad_value(request: Request, exc: ValueError):
     return JSONResponse(status_code=400, content={'detail': str(exc)})
 
 
-class FactorIn(BaseModel):
-    name: str = Field(min_length=1, max_length=100)
-    spec_id: Optional[str] = None
-    recipe: Optional[str] = None
-    params: Optional[Dict[str, Any]] = None
-    window: Optional[int] = Field(default=None, ge=2, le=250)
-    category: str = Field(default='', max_length=40)
-
-
 class FactorSetIn(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     factor_ids: List[str] = Field(min_length=1, max_length=30)
@@ -234,36 +225,6 @@ def configure_feature(factor_id: str, inp: FeatureParamsIn):
         raise ValueError('该特征没有可配置参数')
     save_feature_settings(factor_id, params=factors.canonical_params(spec, inp.params))
     return registered_features()[factor_id]
-
-
-def create_factor(inp: FactorIn):
-    """兼容旧的 Python 调用，特征库与 HTTP API 均直接使用注册定义。"""
-    spec_id = inp.spec_id or inp.recipe
-    if not spec_id:
-        raise ValueError('缺少因子算法 spec_id')
-    try:
-        factor_spec = factors.spec(spec_id)
-    except ValueError:
-        raise ValueError('未知因子算法')
-    if factor_spec.scope == 'event':
-        raise ValueError('缠论事件特征已经内置，请直接从特征库选择')
-    params = dict(inp.params or {})
-    if inp.window is not None:
-        params.setdefault('window', inp.window)
-    params = factors.canonical_params(factor_spec, params)
-    # 未指定分类时使用算法默认族；族为空则归入未分类，不强迫用户先建分类。
-    category = (inp.category or factor_spec.family or '').strip()
-    ensure_category(category)
-    return storage.save('factor', {
-        'name': inp.name,
-        'spec_id': factor_spec.id,
-        'recipe': factor_spec.id,
-        'params': params,
-        'window': params.get('window'),
-        'category': category,
-        'version': factor_spec.version,
-        'scope': factor_spec.scope,
-    })
 
 
 @app.post('/api/categories')
