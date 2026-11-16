@@ -1004,21 +1004,33 @@ function applyStatus(items){
   }
   return changed;
 }
+async function repaintStatus(){
+  const target=pollTarget(page,detail);
+  if(target==='view')await render({cached:true});
+  else if(target==='table'&&$('#experiment-table'))updateExperimentTable();
+  else if(target==='recent'&&$('#recent-experiments'))$('#recent-experiments').innerHTML=recentExperiments();
+}
+// 旧版 API 没有 /api/status（磁盘上的新前端可能仍在旧进程上运行），此时退回整份 catalog 轮询。
+let legacyPolling=false;
 poll=setInterval(async()=>{
   if(pollBusy||document.hidden||$('#dialog').open||!catalog||(!detail&&!catalog.experiments.some(e=>['running','queued'].includes(e.status))))return;
   pollBusy=true;const version=renderVersion;
   try{
-    const next=await api('/status');if(version!==renderVersion)return;
+    const next=await api(legacyPolling?'/catalog':'/status');if(version!==renderVersion)return;
+    if(legacyPolling){
+      const state=items=>JSON.stringify(items.map(e=>[e.id,e.status,e.message]));
+      const changed=state(next.experiments)!==state(catalog.experiments);
+      applyCatalog(next);
+      if(changed||detail)await repaintStatus();
+      return;
+    }
     const ids=new Set(next.experiments.map(item=>item.id));
     const sameSet=next.experiments.length===catalog.experiments.length&&catalog.experiments.every(e=>ids.has(e.id));
     if(!sameSet){await render();return}
-    const changed=applyStatus(next.experiments);
-    if(changed||detail){
-      const target=pollTarget(page,detail);
-      if(target==='view')await render({cached:true});
-      else if(target==='table'&&$('#experiment-table'))updateExperimentTable();
-      else if(target==='recent'&&$('#recent-experiments'))$('#recent-experiments').innerHTML=recentExperiments();
-    }
-  }catch(error){console.warn('实验状态更新失败',error)}
+    if(applyStatus(next.experiments)||detail)await repaintStatus();
+  }catch(error){
+    if(!legacyPolling){legacyPolling=true;console.warn('/api/status 不可用，暂回退到 catalog 轮询（重启 API 后自动恢复）')}
+    else console.warn('实验状态更新失败',error);
+  }
   finally{pollBusy=false}
 },2500);
