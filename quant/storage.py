@@ -100,10 +100,10 @@ def get(kind, key):
 
 
 def all_of(kind):
+    if kind == 'experiment':
+        # 投影需要“实验 + 最新运行”两组数据，交给 runs 一次查完（原来是每条实验扫一遍 run 表）。
+        from .runs import projected_all
+        return projected_all()
     with connect() as con:
         rows = con.execute('SELECT body FROM objects WHERE kind=? ORDER BY rowid DESC', (kind,)).fetchall()
-    records = [json.loads(r[0]) for r in rows]
-    if kind == 'experiment':
-        from .runs import project
-        return [project(record) for record in records]
-    return records
+    return [json.loads(row[0]) for row in rows]

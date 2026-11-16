@@ -19,8 +19,16 @@ def create(db, experiment, run_id=None):
     return record
 
 
+_RUN_FIELDS = ('status', 'message', 'summary', 'job_id')
+
+
 def list_for(experiment_id):
-    return [r for r in storage.all_of('run') if r['experiment_id'] == experiment_id]
+    """只取属于该实验的运行记录，不再把整张 run 表捞出来过滤。"""
+    with storage.connect() as db:
+        rows = db.execute("SELECT body FROM objects WHERE kind='run' "
+                          "AND json_extract(body,'$.experiment_id')=? ORDER BY rowid DESC",
+                          (experiment_id,)).fetchall()
+    return [json.loads(row[0]) for row in rows]
 
 
 def definition(experiment_id):
@@ -31,15 +39,29 @@ def definition(experiment_id):
     return json.loads(row[0])
 
 
+def merge(record, latest):
+    """把最新一次运行的状态投影到实验定义上（含删除中保护）。"""
+    if latest is None or record.get('status') == 'deleting':
+        return record
+    return {**record, **{k: latest[k] for k in _RUN_FIELDS if k in latest},
+            'latest_run_id': latest['id']}
+
+
 def project(record):
     executions = list_for(record['id'])
-    if not executions:
-        return record
-    if record.get('status') == 'deleting':
-        return record
-    latest = executions[0]
-    return {**record, **{k: latest[k] for k in ('status', 'message', 'summary', 'job_id') if k in latest},
-            'latest_run_id': latest['id']}
+    return merge(record, executions[0] if executions else None)
+
+
+def projected_all():
+    """列出全部实验（含最新运行状态）用两次查询，而不是每条实验扫一遍 run 表。"""
+    with storage.connect() as db:
+        experiments = [json.loads(row[0]) for row in
+                       db.execute("SELECT body FROM objects WHERE kind='experiment' ORDER BY rowid DESC")]
+        latest = {}
+        for body in db.execute("SELECT body FROM objects WHERE kind='run' ORDER BY rowid DESC"):
+            run = json.loads(body[0])
+            latest.setdefault(run['experiment_id'], run)
+    return [merge(record, latest.get(record['id'])) for record in experiments]
 
 
 def execution(run_id):
