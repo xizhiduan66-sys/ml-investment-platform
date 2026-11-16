@@ -148,3 +148,13 @@ def counts():
     with storage.connect() as db:
         return {status: n for status, n in
                 db.execute('SELECT status, count(*) FROM research_jobs GROUP BY status')}
+
+
+def forget(run_ids, experiment_id):
+    """删除实验时清掉队列状态与幂等键（归档模块调用）。"""
+    initialize()
+    with storage.connect() as db:
+        db.execute('BEGIN IMMEDIATE')
+        for run_id in run_ids:
+            db.execute('DELETE FROM research_jobs WHERE run_id=?', (run_id,))
+        db.execute('DELETE FROM submission_keys WHERE experiment_id=?', (experiment_id,))

@@ -11,7 +11,7 @@ from fastapi import FastAPI, Header, HTTPException, Response, UploadFile, File, 
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
-from . import targets, planning, policies, prediction_artifacts, jobs, runs, market_queue
+from . import targets, planning, policies, prediction_artifacts, jobs, runs, archive, market_queue
 from . import data, factors, models, storage, engine, backtest, model_config, chan_events, market, market_jobs
 from .splits import bounds as split_bounds
 
@@ -744,33 +744,15 @@ def delete_experiment(experiment_id: str):
         con.execute('BEGIN IMMEDIATE')
         row = con.execute("SELECT body FROM objects WHERE kind='experiment' AND id=?", (experiment_id,)).fetchone()
         if not row:
-            return {'ok': True}
+            return {'ok': True, 'files': [], 'failed': []}
         record = json.loads(row[0])
-        active_runs = [json.loads(r[0]) for r in con.execute("SELECT body FROM objects WHERE kind='run'").fetchall()]
-        if record.get('status') in ('queued', 'running') or any(r['experiment_id'] == experiment_id and r['status'] in ('queued', 'running') for r in active_runs):
+        if (record.get('status') in ('queued', 'running') or
+                any(execution['status'] in ('queued', 'running') for execution in runs.list_for(experiment_id))):
             raise HTTPException(409, '请等实验结束后再删除')
         record.update(status='deleting', message='正在清理实验')
         con.execute("UPDATE objects SET body=? WHERE id=?", (json.dumps(record, ensure_ascii=False), experiment_id))
-
-    dataset = record.get('snapshot', {}).get('dataset', {})
-    paths = [f'{experiment_id}.json', f'{experiment_id}.pkl', f'{experiment_id}.predictions.json']
-    for execution in runs.list_for(experiment_id):
-        artifact_id = execution.get('artifact_id', execution['id'])
-        paths.extend([artifact_id + suffix for suffix in ('.json', '.pkl', '.predictions.json')])
-    if dataset.get('experiment_id') == experiment_id:
-        paths.append(f'{experiment_id}.csv')
-    try:
-        for name in paths:
-            (storage.ROOT / name).unlink(missing_ok=True)
-    except OSError as exc:
-        raise HTTPException(500, '实验文件清理失败，请重试删除') from exc
-    with storage.connect() as con:
-        for execution in runs.list_for(experiment_id):
-            con.execute('DELETE FROM research_jobs WHERE run_id=?', (execution['id'],))
-            con.execute("DELETE FROM objects WHERE kind='run' AND id=?", (execution['id'],))
-        con.execute("DELETE FROM objects WHERE kind='experiment' AND id=?", (experiment_id,))
-        con.execute('DELETE FROM submission_keys WHERE experiment_id=?', (experiment_id,))
-    return {'ok': True}
+    # 行与文件、队列状态的清理集中在一处（archive.purge），HTTP 层不再自己拼文件名。
+    return {'ok': True, **archive.purge(experiment_id)}
 
 
 @app.get('/api/experiments/{experiment_id}/runs')

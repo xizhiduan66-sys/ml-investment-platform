@@ -111,3 +111,9 @@ def all_of(kind):
     with connect() as con:
         rows = con.execute('SELECT body FROM objects WHERE kind=? ORDER BY rowid DESC', (kind,)).fetchall()
     return [json.loads(row[0]) for row in rows]
+
+
+def delete(kind, key):
+    """删除一条对象记录。"""
+    with connect() as con:
+        con.execute('DELETE FROM objects WHERE kind=? AND id=?', (kind, key))
