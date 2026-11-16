@@ -1,3 +1,9 @@
+"""研究库的 SQLite 访问：连接治理、文档表、修订号。
+
+对象仍然以 objects(kind, body JSON) 存储。schema 只在每个数据目录首次使用时建立一次
+（并切到 WAL），普通连接不再重复执行 DDL —— 之前每次 connect 都跑 CREATE TABLE，
+在 Worker 写 + API 读并发的场景下会额外抢锁。
+"""
 import json
 import os
 import sqlite3
@@ -9,16 +15,66 @@ from pathlib import Path
 ROOT = Path(os.environ.get('QUANT_DATA_DIR', Path(__file__).resolve().parent.parent / 'data'))
 ROOT.mkdir(parents=True, exist_ok=True)
 
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS objects (id TEXT PRIMARY KEY, kind TEXT, body TEXT);
+CREATE INDEX IF NOT EXISTS objects_kind ON objects(kind, id);
+CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value INTEGER NOT NULL);
+"""
+
+# 已建过表的数据目录。按 ROOT 记录，测试可以随时把 ROOT 指到新的临时目录。
+_ready = set()
+
+
+def database():
+    return ROOT / 'research.db'
+
+
+def _connect():
+    return sqlite3.connect(database(), timeout=30)
+
+
+def ensure_schema():
+    """幂等建表 + 切 WAL。放在 connect() 里调用，所有入口都不必记得初始化。"""
+    key = str(ROOT)
+    if key in _ready:
+        return
+    con = _connect()
+    try:
+        try:
+            con.execute('PRAGMA journal_mode=WAL')
+        except sqlite3.OperationalError:
+            pass  # 另一个进程正在首次初始化时保持原模式，不影响一致性
+        con.executescript(SCHEMA)
+    finally:
+        con.close()
+    _ready.add(key)
+
 
 @contextmanager
 def connect():
-    con = sqlite3.connect(ROOT / 'research.db', timeout=30)
+    ensure_schema()
+    con = _connect()
     try:
         with con:
-            con.execute('CREATE TABLE IF NOT EXISTS objects (id TEXT PRIMARY KEY, kind TEXT, body TEXT)')
             yield con
     finally:
         con.close()
+
+
+def touch(con):
+    """标记一次语义写入。/api/catalog 的 ETag 依赖这个单调计数。"""
+    con.execute("INSERT INTO meta VALUES ('revision', 1) "
+                'ON CONFLICT(key) DO UPDATE SET value=value+1')
+
+
+def revision():
+    ensure_schema()
+    con = _connect()
+    try:
+        row = con.execute("SELECT value FROM meta WHERE key='revision'").fetchone()
+    finally:
+        con.close()
+    return row[0] if row else 0
 
 
 def save(kind, body):
@@ -27,6 +83,7 @@ def save(kind, body):
     body.setdefault('created_at', datetime.now(timezone.utc).isoformat())
     with connect() as con:
         con.execute('INSERT INTO objects VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET kind=excluded.kind, body=excluded.body', (body['id'], kind, json.dumps(body, ensure_ascii=False, allow_nan=False)))
+        touch(con)
     return body
 
 
