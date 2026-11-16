@@ -607,7 +607,8 @@ def label_preview(dataset_id: str, target_id: str):
     if target['kind'] == 'chan_structure':
         if dataset['rows'] > 10000:
             raise ValueError('事件标签预览最多回放 10000 根 K 线，请选择较短的行情快照')
-        report = chan_events.replay(data.load(dataset))
+        df = data.load(dataset)
+        report = chan_events.replay(df)
         recent = report['events'][-20:]
         labels = targets.calculate(df, target, [event['observed_at'] for event in recent], events=recent)
         events = [

@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 from quant import storage, jobs, runs
-from quant.app import worker_status, research_preflight, PreflightIn, ExperimentIn
+from quant.app import worker_status, research_preflight, label_preview, PreflightIn, ExperimentIn
 from quant.worker import exclusive_worker
 
 
@@ -33,3 +33,19 @@ class WizardTest(unittest.TestCase):
         config = dict(name='test', model='lstm', target_id='forward_return')
         self.assertTrue(ExperimentIn(**config).auto_backtest)
         self.assertFalse(ExperimentIn(**config, auto_backtest=False).auto_backtest)
+
+    def test_structure_label_preview_uses_loaded_snapshot(self):
+        observed, confirmed = '2025-01-01T10:00:00Z', '2025-01-01T11:00:00Z'
+        event = {'event_id': 'candidate', 'observed_at': 0, 'observed_time': observed,
+                 'label': 1, 'label_end': 1, 'label_time': confirmed,
+                 'eligible': True, 'status': 'confirmed'}
+        frame = object()
+        with patch('quant.app.storage.get', return_value={'rows': 2}), \
+             patch('quant.app.data.load', return_value=frame), \
+             patch('quant.app.chan_events.replay', return_value={'events': [event], 'counts': {'confirmed': 1}}) as replay:
+            preview = label_preview('snapshot', 'chan_structure_v1')
+        replay.assert_called_once_with(frame)
+        self.assertEqual(preview['events'], [
+            {'event_id': 'candidate', 'observed_time': observed, 'label_time': confirmed,
+             'label': 1, 'status': 'confirmed'},
+        ])

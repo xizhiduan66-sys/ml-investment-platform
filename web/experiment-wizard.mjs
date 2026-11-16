@@ -49,7 +49,7 @@ const input=(label,name,value,attributes='')=>`<div class="field"><label for="${
 const select=(label,id,options,name=id)=>`<div class="field"><label for="${id}">${esc(label)}</label><select id="${id}" ${name?`name="${name}"`:''}>${options}</select></div>`;
 const option=(value,label,selected)=>`<option value="${esc(value)}" ${selected?'selected':''}>${esc(label)}</option>`;
 
-export function mountExperimentWizard({catalog,inventory,copy,datasetId,factorId,modal,mountForm,marketRequest}){
+export function mountExperimentWizard({catalog,inventory,copy,datasetId,factorId,modal,mountForm,marketRequest,taskTemplateId}){
   const c=copy?.snapshot.config||{};
   const eventCatalog=catalog.chan_event;
   const eventTypes=Object.entries(eventCatalog?.types||{});
@@ -408,5 +408,9 @@ export function mountExperimentWizard({catalog,inventory,copy,datasetId,factorId
     if(step<4){ev.preventDefault();ev.stopPropagation();advance(step+1);return}
     for(let i=0;i<5;i++)if(!valid(i)){ev.preventDefault();ev.stopPropagation();return}
   });
-  intervals(initial?.id);renderChoices(copiedTargetId,c.model);syncMode();chooseTask(templates.find(t=>t.target_id===q('#target_id').value&&t.sample_mode===(eventMode?'chan_event':'bar')),true);q('#auto-backtest').checked=!eventMode&&(c.auto_backtest!==false);show(0);
+  intervals(initial?.id);renderChoices(copiedTargetId,c.model);syncMode();
+  const requestedTask=templates.find(t=>t.id===taskTemplateId);
+  const defaultTask=templates.find(t=>t.target_id===q('#target_id').value&&t.sample_mode===(eventMode?'chan_event':'bar'));
+  chooseTask(requestedTask||defaultTask,true);
+  q('#auto-backtest').checked=!eventMode&&(c.auto_backtest!==false);show(0);
 }

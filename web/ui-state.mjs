@@ -39,6 +39,7 @@ export function createRequestGate() {
 
 // Background status updates must never replace an editable research form.
 export function pollTarget(page, detail) {
-  if (detail || page === 'overview') return 'view';
-  return page === 'experiments' ? 'table' : null;
+  if (detail) return 'view';
+  if (page === 'experiments') return 'table';
+  return page === 'experiment-center' ? 'recent' : null;
 }
