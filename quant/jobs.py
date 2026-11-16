@@ -11,6 +11,13 @@ SCHEMA = '''CREATE TABLE IF NOT EXISTS research_jobs (
  created_at REAL NOT NULL, finished_at REAL, error TEXT
 )'''
 
+# 数据模型版本。2 = 实验定义与运行记录已拆分（experiment 行冻结，status 移到 run）。
+SCHEMA_VERSION = 2
+
+# 旧格式实验的特征：定义行里还带着 status。迁移后该字段消失，
+# 所以这个 LIKE 探测只在“还没迁移”或“又出现旧格式行”时为真。
+_LEGACY_PROBE = 'SELECT 1 FROM objects WHERE kind=? AND body LIKE ? LIMIT 1'
+
 
 def initialize():
     with storage.connect() as db:
@@ -19,8 +26,17 @@ def initialize():
         if 'experiment_id' in [r[1] for r in db.execute('PRAGMA table_info(research_jobs)')]:
             db.execute('ALTER TABLE research_jobs RENAME COLUMN experiment_id TO run_id')
         db.execute('CREATE INDEX IF NOT EXISTS research_jobs_queue ON research_jobs(status, created_at)')
+        db.execute('CREATE TABLE IF NOT EXISTS schema_version (version INTEGER PRIMARY KEY)')
+        version = db.execute('SELECT max(version) FROM schema_version').fetchone()[0] or 0
+        # 迁移会把所有实验行的快照 json.loads 一遍再改写。initialize() 在每次
+        # enqueue/retry/delete 都会被调用，所以先做两个廉价判定：版本已到位、
+        # 且库里没有旧格式实验行，就直接跳过 —— 既不丢“调用即补迁移”的语义，
+        # 也不再每次提交都整表重写。
+        if version >= SCHEMA_VERSION and db.execute(_LEGACY_PROBE, ('experiment', '%"status"%')).fetchone() is None:
+            return
         db.execute('BEGIN IMMEDIATE')
         runs.migrate(db)
+        db.execute('INSERT OR REPLACE INTO schema_version VALUES (?)', (SCHEMA_VERSION,))
 
 
 def enqueue(experiment):
