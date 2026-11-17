@@ -11,7 +11,11 @@ from .factors.spec import ParamSpec, canonical_params, param_schema
 def forward_labels(df, target):
     h = target['horizon']
     raw = df.open.shift(-(h + 1)) / df.open.shift(-1) - 1
-    return raw if target['task'] == 'regression' else (raw > target['threshold']).astype(float).where(raw.notna())
+    if target['task'] == 'regression':
+        return raw
+    if target['task'] == 'multiclass':
+        return raw.map(lambda value: 0 if value < target['lower'] else 2 if value > target['upper'] else 1).where(raw.notna())
+    return (raw > target['threshold']).astype(float).where(raw.notna())
 
 
 def settle_structure_label(retained, bar, time):
@@ -61,13 +65,19 @@ class TargetSpec:
     maturity: str
     parameters: Tuple[ParamSpec, ...]
     calculate: Callable
+    classes: Tuple[str, ...] = ()
+    event_source: str = ''
 
     def definition(self, supplied=None):
         params = canonical_params(self, supplied)
+        if self.task == 'multiclass' and params['lower'] >= params['upper']:
+            raise ValueError('收益分档下界必须小于上界')
         return {
             'id': self.id, 'version': self.version, 'name': self.name, 'task': self.task,
             'kind': self.kind, 'sample_modes': list(self.sample_modes), 'description': self.description,
             'maturity': self.maturity, 'parameters': param_schema(self.parameters), 'params': params,
+            'classes': list(self.classes),
+            'event_source': self.event_source,
             **params,
         }
 
@@ -78,7 +88,7 @@ class TargetSpec:
 
 _HORIZON = ParamSpec('horizon', 'int', 5, 1, 60, description='持有周期（K 线根数）')
 _THRESHOLD = ParamSpec('threshold', 'float', .005, -.5, .5, description='收益门槛（0.005 = 0.5%）')
-_RETURN_MODES = ('bar', 'chan_event')
+_RETURN_MODES = ('bar', 'chan_event', 'event')
 _RETURN_MATURITY = '从下一根 K 线开盘开始，持有周期结束时确定。'
 _REGISTERED = {
     (spec.id, spec.version): spec for spec in (
@@ -87,10 +97,17 @@ _REGISTERED = {
                    _RETURN_MATURITY, (_HORIZON,), _forward_samples),
         TargetSpec('forward_return_above', 1, '未来收益超过门槛', 'binary', 'forward_return',
                    _RETURN_MODES, '收益严格超过门槛记 1，其余记 0。',
-                   _RETURN_MATURITY, (_HORIZON, _THRESHOLD), _forward_samples),
+                   _RETURN_MATURITY, (_HORIZON, _THRESHOLD), _forward_samples, ('未超过门槛', '超过门槛')),
+        TargetSpec('forward_return_band', 1, '未来收益分档', 'multiclass', 'return_band',
+                   _RETURN_MODES, '收益低于下界为下跌，高于上界为上涨，区间内（含边界）为横盘。',
+                   _RETURN_MATURITY, (_HORIZON,
+                       ParamSpec('lower', 'float', -.005, -.5, .5, description='收益下界（−0.005 = −0.5%）'),
+                       ParamSpec('upper', 'float', .005, -.5, .5, description='收益上界（0.005 = 0.5%）')),
+                   _forward_samples, ('下跌', '横盘', '上涨')),
         TargetSpec('chan_structure_v1', 1, '一二类买卖点 · 结构确认', 'binary', 'chan_structure',
                    ('chan_event',), '候选点在结构冻结时保留记 1，撤销记 0。',
-                   '结构冻结时确定，尚未判定的候选点留空。', (), _structure_samples),
+                   '结构冻结时确定，尚未判定的候选点留空。', (), _structure_samples, ('撤销', '保留'),
+                   event_source='chan'),
     )
 }
 _CURRENT = {spec.id: spec for spec in _REGISTERED.values()}
@@ -136,8 +153,17 @@ def calculate(df, target, observations, *, events=None):
 def output(target):
     if target.get('kind') == 'chan_structure':
         return {'task': 'binary', 'meaning': '候选买卖点最终结构确认保留的概率',
-                'unit': 'probability', 'horizon': None}
+                'unit': 'probability', 'horizon': None, 'classes': class_names(target)}
+    if target['task'] == 'multiclass':
+        return {'task': 'multiclass', 'horizon': target['horizon'], 'unit': 'probability',
+                'meaning': '未来收益落入各区间的概率', 'classes': class_names(target)}
     regression = target['task'] == 'regression'
     return {'task': target['task'], 'horizon': target['horizon'],
             'meaning': '未来可交易区间收益率' if regression else '未来收益超过目标门槛的概率',
-            'unit': 'return' if regression else 'probability'}
+            'unit': 'return' if regression else 'probability',
+            **({} if regression else {'classes': class_names(target)})}
+
+
+def class_names(target):
+    return target.get('classes') or (['撤销', '保留'] if target.get('kind') == 'chan_structure'
+                                    else ['未超过门槛', '超过门槛'] if target['task'] == 'binary' else [])

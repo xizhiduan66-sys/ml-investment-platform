@@ -10,17 +10,20 @@ def fit(kind, task, xtrain, ytrain, xvalid, yvalid, epochs, progress, seed, para
     estimator = cls(**params, verbosity=-1, random_state=seed, n_jobs=2)
     scaler = StandardScaler().set_output(transform='pandas').fit(xtrain)
     (tx, vx) = [scaler.transform(x) for x in (xtrain, xvalid)]
+    metric = {'regression': 'rmse', 'binary': 'binary_logloss', 'multiclass': 'multi_logloss'}[task]
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter('always')
-        estimator.fit(tx, ytrain, eval_set=[(tx, ytrain), (vx, yvalid)], eval_names=['train', 'valid'], eval_metric='rmse' if task == 'regression' else 'binary_logloss')
+        estimator.fit(tx, ytrain, eval_set=[(tx, ytrain), (vx, yvalid)], eval_names=['train', 'valid'], eval_metric=metric)
     model = make_pipeline(scaler, estimator)
-    predict = estimator.predict if task == 'regression' else lambda x: estimator.predict_proba(x)[:, 1]
 
     def infer(x):
-        return np.asarray(predict(scaler.transform(x)))
+        transformed = scaler.transform(x)
+        if task == 'regression':
+            return np.asarray(estimator.predict(transformed))
+        probabilities = estimator.predict_proba(transformed)
+        return probabilities[:, 1] if task == 'binary' else probabilities
     history = []
     detail = {'kind': kind, 'seed': seed, 'parameters': params, 'warnings': [str(w.message) for w in caught], 'selection': '固定超参数，不用测试集选模型'}
-    metric = 'rmse' if task == 'regression' else 'binary_logloss' if kind == 'lightgbm' else 'logloss'
     train_history = estimator.evals_result_['train'][metric]
     valid_history = estimator.evals_result_['valid'][metric]
     gain = estimator.booster_.feature_importance(importance_type='gain').astype(float).tolist()

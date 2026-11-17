@@ -264,3 +264,7 @@ dialog.experiment-dialog{width:min(1000px,96vw)}
   .asset-tabs{justify-content:space-between;gap:3px;padding-inline:9px}
   .task-row{flex-wrap:wrap}
 }
+
+@media(max-width:480px){
+  .asset-tabs{flex-wrap:wrap;justify-content:flex-start;gap:4px 10px}
+}

@@ -4,7 +4,7 @@ def parameter(name, label, default, minimum, maximum, kind='float'):
 
 
 def schema(kind, task):
-    if task not in ('regression', 'binary'):
+    if task not in ('regression', 'binary', 'multiclass'):
         raise ValueError('不支持的学习任务')
     if kind == 'lightgbm':
         return [parameter('n_estimators', '最大迭代轮数', 100, 10, 1000, 'int'),

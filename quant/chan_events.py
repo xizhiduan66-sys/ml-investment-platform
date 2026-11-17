@@ -1,9 +1,8 @@
 """Point-in-time Chan buy/sell events; labels settle only behind the freeze frontier."""
 import copy
-import numpy as np
 import pandas as pd
-from . import factors, splits, targets
-from .targets import STRUCTURE_CONFIRMATION as TARGET, settle_structure_label
+from . import factors
+from .targets import settle_structure_label
 from .factors.plugins.chan import comparison_pair
 
 VERSION = 'chan-events-v1'
@@ -14,7 +13,7 @@ CONFIG = {'trigger_step': True, 'bi_strict': True, 'bs_type': '1,2',
 FEATURES = [
     {'id': spec.id, 'spec_id': spec.id, 'name': spec.name, 'description': spec.description,
      'category': spec.family, 'params': {}, 'version': spec.version, 'scope': spec.scope}
-    for spec in factors.specs().values() if spec.id.startswith('chan.') and spec.scope == 'event'
+    for spec in factors.specs().values() if spec.scope == 'event' and (spec.event_source or 'chan') == 'chan'
 ]
 
 EVENT_TYPES = {'1:buy': '一买', '1:sell': '一卖', '2:buy': '二买', '2:sell': '二卖'}
@@ -107,31 +106,3 @@ def replay(df, progress=lambda _: None, *, feature_records=()):
     return {'version': VERSION, 'upstream': UPSTREAM, 'config': CONFIG, 'events': events,
             'counts': {s: sum(e['status'] == s for e in events) for s in ('pending', 'confirmed', 'invalidated')},
             'immediately_settled': sum(not e['eligible'] for e in events)}
-
-
-def split_events(events, n):
-    a, b = splits.edges(n)
-    return {name: [e for e in events if e['eligible'] and e['label'] is not None and
-                  lo <= e['observed_at'] < hi and e['label_end'] < hi]
-            for name, lo, hi in [('train', 0, a), ('valid', a, b), ('test', b, n)]}
-
-
-def prepare_samples(df, snap, progress, target=None):
-    """Assemble one row per event, using ordinary factor values at its observation bar."""
-    if snap.get('chan') != {'version': VERSION, 'upstream': UPSTREAM, 'config': CONFIG}:
-        raise ValueError('缠论计算配置已变化，请重新创建实验')
-    records = snap['factors']
-    report = filter_report(replay(df, progress, feature_records=records), snap['config'].get('event_types'))
-    matrix = factors.event_matrix(df, records, report['events'])
-    target = target if target is not None else snap.get('target', TARGET)
-    observations = [event['observed_at'] for event in report['events']]
-    labels = targets.calculate(df, target, observations, events=report['events'])
-    samples = []
-    for event, values, label, end in zip(report['events'], matrix.to_dict(orient='records'), labels.values, labels.ends):
-        if end < 0 or not all(np.isfinite(value) for value in values.values()):
-            continue
-        sample = {**event, 'features': {**event['features'], **values},
-                  'eligible': True, 'label': float(label), 'label_end': int(end),
-                  'label_time': str(df.date.iloc[end])}
-        samples.append(sample)
-    return report, split_events(samples, len(df))

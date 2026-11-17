@@ -36,8 +36,16 @@ class PredictionSet:
     values: np.ndarray
     semantic: str
     positive_class: int | None = None
+    classes: tuple = ()
 
     def __post_init__(self):
+        if self.semantic == 'class_probabilities':
+            if (len(self.classes) < 2 or len(set(self.classes)) != len(self.classes)
+                    or self.values.shape != (len(self.sample_ids), len(self.classes))
+                    or not np.isfinite(self.values).all() or np.any(self.values < 0)
+                    or np.any(self.values > 1) or not np.allclose(self.values.sum(axis=1), 1)):
+                raise ValueError('分类预测必须按类别顺序给出有效的概率分布')
+            return
         if self.values.shape != (len(self.sample_ids),) or not np.isfinite(self.values).all():
             raise ValueError('预测必须与样本对应且为有限数值')
         if self.semantic == 'probability' and (self.positive_class != 1 or

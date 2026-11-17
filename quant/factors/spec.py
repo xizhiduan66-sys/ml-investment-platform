@@ -61,6 +61,7 @@ class FactorSpec:
     missing: str = "nan"  # nan / neutral / drop
     requires: Tuple[str, ...] = ()
     compute: Optional[Callable[..., Any]] = field(default=None, compare=False, repr=False)
+    event_source: Optional[str] = None
 
     def param_schema(self):
         return param_schema(self.params)

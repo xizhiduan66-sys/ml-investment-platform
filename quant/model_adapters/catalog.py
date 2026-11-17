@@ -6,7 +6,7 @@ def entries():
       'diagnostics': ['训练/验证曲线', 'Gain 与分裂重要性', '验证最优轮次'],
       'name': 'LightGBM',
       'input': 'vector',
-      'tasks': ['regression', 'binary'],
+      'tasks': ['regression', 'binary', 'multiclass'],
       'description': '梯度提升树，支持收益回归与概率分类'},
      {'id': 'xgboost',
       'diagnostics': ['训练/验证曲线', 'Gain 与分裂重要性', '验证最优轮次'],

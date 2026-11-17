@@ -62,7 +62,28 @@ function modelPanel(d){
   return html+'</details>';
 }
 
+function multiclassDiagnostics(d, selected){
+  const split=d.splits[selected]?selected:'valid', summary=d.splits[split];
+  const partitionNames=Object.keys(splitNames);
+  const metrics=[
+    ['样本数',...partitionNames.map(name=>d.splits[name].count)],
+    ...[['accuracy','准确率'],['macro_f1','宏平均 F1'],['log_loss','Log Loss']].map(([key,label])=>
+      [label,...partitionNames.map(name=>key==='log_loss'?fmt(d.splits[name].metrics[key]):percent(d.splits[name].metrics[key]))]),
+    ...d.classes.map((name,index)=>[escape(name)+'样本数',...partitionNames.map(p=>d.splits[p].class_counts[index])]),
+  ];
+  return `<section class="panel"><div class="panel-head"><h2>多分类诊断</h2>
+    <label class="diagnostic-select">详细诊断分区 <select id="diagnostics-split">${Object.entries(splitNames).map(([key,name])=>
+      `<option value="${key}" ${key===split?'selected':''}>${name}</option>`).join('')}</select></label></div>
+    <div class="panel-body">${table(['指标',...Object.values(splitNames)],metrics)}
+      <div class="diagnostic-section"><h3>${splitNames[split]} · 混淆矩阵</h3>
+        ${table(['实际 / 预测',...d.classes],summary.confusion.map((row,i)=>[escape(d.classes[i]),...row]))}
+        ${note(`模型 Log Loss ${fmt(summary.metrics.log_loss)} · 训练类别频率基线 ${fmt(summary.baseline_log_loss)}`)}</div>
+      ${modelPanel(d)}${d.notes.map(note).join('')}
+    </div></section>`;
+}
+
 export function renderDiagnostics(d, selected='valid'){
+  if(d?.task==='multiclass')return multiclassDiagnostics(d,selected);
   if(!d)return `<section class="panel"><div class="panel-head"><h2>模型诊断</h2><span class="badge gray">历史实验</span></div><div class="panel-body">${note('此实验尚未保存完整模型诊断。复制配置并重新运行后，可查看分区指标、基线与模型诊断；历史结果保持不变。')}</div></section>`;
   const split=d.splits[selected]?selected:'valid',s=d.splits[split],binary=d.task==='binary',keys=binary?binaryMetrics:regressionMetrics;
   const baseLabels={train_mean:'训练均值预测',zero:'恒定零收益',train_prevalence:'训练正类比例预测'};

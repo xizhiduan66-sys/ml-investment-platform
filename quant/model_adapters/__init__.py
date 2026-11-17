@@ -61,7 +61,7 @@ _ADAPTERS = {}
 def register(adapter):
     if not isinstance(adapter, ModelAdapter) or adapter.input_layout not in ('vector', 'sequence'):
         raise ValueError('无效的模型适配器')
-    if not adapter.tasks or not set(adapter.tasks) <= {'regression', 'binary'}:
+    if not adapter.tasks or not set(adapter.tasks) <= {'regression', 'binary', 'multiclass'}:
         raise ValueError('不支持的学习任务')
     if adapter.id in _ADAPTERS:
         raise ValueError('模型已注册：' + adapter.id)

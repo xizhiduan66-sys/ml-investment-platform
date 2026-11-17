@@ -4,7 +4,7 @@ import pandas as pd
 from sklearn.metrics import (mean_absolute_error, mean_squared_error, r2_score,
                              roc_auc_score, average_precision_score, log_loss,
                              brier_score_loss, confusion_matrix, roc_curve,
-                             precision_recall_curve)
+                             precision_recall_curve, f1_score)
 
 VERSION = 'model-diagnostics-v1'
 CLASSIFICATION_THRESHOLD = .5
@@ -127,4 +127,28 @@ def report(task, samples, model_diagnostics):
                                   'baseline_improvement': number(improvement), 'primary_metric': key,
                                   'charts': charts(y, pred, task), 'segments': segments,
                                   'warnings': (['标签只有一个类别，AUC/AP 不定义。'] if task == 'binary' and len(np.unique(y)) < 2 else [])}
+    return result
+
+
+def multiclass_report(samples, model_diagnostics, classes):
+    labels = list(range(len(classes)))
+    train = samples['train']['y'].astype(int)
+    prior = np.bincount(train, minlength=len(classes)) / len(train)
+    result = {'version': 'model-diagnostics-v2', 'task': 'multiclass', 'classes': list(classes),
+              'splits': {}, 'model': model_diagnostics,
+              'notes': ['按目标声明的类别顺序保存概率。类别预测取概率最高的一类。',
+                        '基线只使用训练集的类别频率。宏平均 F1 对所有定义的类别等权，无法计算的单类 F1 记为 0。']}
+    for name, sample in samples.items():
+        y, probabilities, dates = sample['y'].astype(int), sample['pred'], sample['dates']
+        predicted = probabilities.argmax(axis=1)
+        confusion = confusion_matrix(y, predicted, labels=labels)
+        result['splits'][name] = {'count': len(y), 'start': dates[0], 'end': dates[-1],
+                                  'metrics': {
+                                      'accuracy': float(np.mean(y == predicted)),
+                                      'macro_f1': float(f1_score(y, predicted, labels=labels, average='macro', zero_division=0)),
+                                      'log_loss': float(log_loss(y, probabilities, labels=labels)),
+                                  },
+                                  'baseline_log_loss': float(log_loss(y, np.tile(prior, (len(y), 1)), labels=labels)),
+                                  'class_counts': confusion.sum(axis=1).tolist(),
+                                  'confusion': confusion.tolist()}
     return result

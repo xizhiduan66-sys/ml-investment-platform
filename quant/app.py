@@ -13,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from . import targets, planning, policies, prediction_artifacts, jobs, runs, archive, market_queue
 from . import data, factors, models, storage, engine, backtest, model_config, chan_events, market, market_jobs
+from . import triggers
 from .splits import bounds as split_bounds
 
 BASE = Path(__file__).resolve().parent.parent
@@ -78,6 +79,18 @@ class MarketRange(BaseModel):
     audit: bool = True
 
 
+class TriggerIn(BaseModel):
+    kind: str
+    rule_id: Optional[str] = None
+
+
+class EventRuleIn(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    provider: str
+    version: int = Field(ge=1)
+    params: Dict[str, Any] = Field(default_factory=dict)
+
+
 class ExperimentIn(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     dataset_id: Optional[str] = None
@@ -90,6 +103,7 @@ class ExperimentIn(BaseModel):
     target_params: Dict[str, Any] = Field(default_factory=dict)
     model: str
     sample_mode: str = 'bar'
+    trigger: Optional[TriggerIn] = None
     event_types: Optional[List[str]] = Field(default=None, max_length=4)
     model_params: Dict[str, Any] = Field(default_factory=dict)
     lookback: int = Field(default=30, ge=3, le=120)
@@ -118,6 +132,7 @@ def registered_features():
             'description': spec.description, 'category': saved.get('category', spec.family),
             'note': saved.get('note', ''), 'params': params,
             'version': spec.version, 'scope': spec.scope, 'registered': True,
+            'event_source': (spec.event_source or 'chan') if spec.scope == 'event' else None,
         }
     return records
 
@@ -154,7 +169,8 @@ def catalog():
         'targets': targets.catalog(),
         'task_templates': [{'id': mode + ':' + t['id'], 'target_id': t['id'], 'sample_mode': mode,
                             'name': ('事件 · ' if mode == 'chan_event' else '') + t['name']}
-                           for t in targets.catalog() for mode in t['sample_modes']],
+                           for t in targets.catalog() for mode in t['sample_modes'] if mode in ('bar', 'chan_event')],
+        'events': triggers.catalog(),
         'models': models.registry(),
         'chan_event': {'features': [feature for feature in features if feature['scope'] == 'event'],
                        'version': chan_events.VERSION,
@@ -201,7 +217,9 @@ def status():
 
 class PreflightIn(BaseModel):
     model: str
-    sample_mode: str
+    sample_mode: str = 'bar'
+    trigger: Optional[TriggerIn] = None
+    event_types: Optional[List[str]] = Field(default=None, max_length=4)
     target_id: str
     target_params: Dict[str, Any] = Field(default_factory=dict)
     model_params: Dict[str, Any] = Field(default_factory=dict)
@@ -212,10 +230,28 @@ class PreflightIn(BaseModel):
 def research_preflight(inp: PreflightIn):
     target = targets.get(inp.target_id, None, inp.target_params)
     records = feature_records(inp.factor_ids)
-    if inp.sample_mode == 'bar' and any(factors.resolve(record)[0].scope == 'event' for record in records):
-        raise ValueError('事件特征需要事件采样')
+    trigger = triggers.request(inp.trigger, inp.sample_mode, inp.event_types)
+    planning.validate_features(records, trigger)
     manifest = factors.build_manifest(records)
-    return {'plan': planning.compile_plan(inp.model_dump(), target), 'manifest': manifest.to_dict()}
+    return {'plan': planning.compile_plan({**inp.model_dump(), 'trigger': trigger}, target), 'manifest': manifest.to_dict()}
+
+
+@app.post('/api/event-rules', status_code=201)
+def save_event_rule(inp: EventRuleIn):
+    name = inp.name.strip()
+    if not name:
+        raise ValueError('请填写事件规则名称')
+    return storage.save('event_rule', {'name': name, **triggers.definition(inp.provider, inp.params, inp.version)})
+
+
+@app.get('/api/event-rules/{rule_id}/preview/{dataset_id}')
+def preview_event_rule(rule_id: str, dataset_id: str):
+    rule = triggers.rule(rule_id)
+    dataset = storage.get('dataset', dataset_id)
+    if rule['provider'] == 'chan' and dataset['rows'] > 10000:
+        raise ValueError('缠论事件预览最多回放 10000 根 K 线，请选择较短的行情快照')
+    events = triggers.replay(data.load(dataset), rule)['events']
+    return {'count': len(events), 'events': events[-50:]}
 
 
 @app.get('/api/chan-events/{dataset_id}')
@@ -448,7 +484,7 @@ def create_backtest(inp: BacktestIn):
         result_path = storage.ROOT / (artifact_id + '.json')
         if not result_path.exists():
             raise ValueError('实验 result 文件不存在')
-        if experiment['snapshot']['config'].get('sample_mode') == 'chan_event':
+        if triggers.for_config(experiment['snapshot']['config'])['kind'] == 'event':
             if experiment['snapshot']['target'].get('kind') == 'chan_structure':
                 raise ValueError('结构有效性概率需要独立的交易执行规则')
             raise ValueError('事件收益预测需要独立的交易执行规则')
@@ -459,6 +495,8 @@ def create_backtest(inp: BacktestIn):
         dataset = experiment['snapshot']['dataset']
         df = data.load(dataset)
         task = (experiment.get('snapshot', {}).get('target') or {}).get('task') or experiment_result.get('output', {}).get('task') or 'binary'
+        if task == 'multiclass':
+            raise ValueError('多分类预测需要独立的交易执行规则')
         threshold = inp.threshold
         if threshold is None:
             config = experiment.get('snapshot', {}).get('config') or {}
@@ -609,7 +647,8 @@ def label_preview(dataset_id: str, target_id: str):
         raise ValueError('当前样本的标签无法确定')
     return {'decision_time': df.date.iloc[i], 'entry_time': df.date.iloc[i + 1],
             'end_time': df.date.iloc[end], 'entry_price': float(df.open.iloc[i + 1]),
-            'end_price': float(df.open.iloc[end]), 'label': float(labels.values[0]), 'task': target['task']}
+            'end_price': float(df.open.iloc[end]), 'label': float(labels.values[0]), 'task': target['task'],
+            'classes': targets.class_names(target)}
 
 
 @app.post('/api/experiments')
@@ -620,17 +659,9 @@ def create_experiment(inp: ExperimentIn):
             prior = db.execute('SELECT experiment_id FROM submission_keys WHERE key=?', (inp.submission_key,)).fetchone()
         if prior:
             return storage.get('experiment', prior[0])
-    if inp.sample_mode not in ('bar', 'chan_event'):
-        raise ValueError('未知采样模式')
-    event_mode = inp.sample_mode == 'chan_event'
+    trigger = triggers.request(inp.trigger, inp.sample_mode, inp.event_types)
+    sample_mode = triggers.sample_mode(trigger)
     target = targets.get(inp.target_id, inp.target_version, inp.target_params)
-    if event_mode and models.is_sequence(inp.model):
-        raise ValueError('事件实验请选择向量输入模型')
-    if inp.sample_mode not in target['sample_modes']:
-        raise ValueError('所选目标变量需要缠论事件采样')
-    if not event_mode and inp.event_types is not None:
-        raise ValueError('买卖点类型需要事件采样')
-    event_types = chan_events.normalize_types(inp.event_types) if event_mode else None
     if not models.is_sequence(inp.model) and inp.diagnostic_runs != 1:
         raise ValueError('多随机种子诊断当前仅适用于 LSTM / GRU')
     model = next((m for m in models.registry() if m['id'] == inp.model), None)
@@ -660,11 +691,7 @@ def create_experiment(inp: ExperimentIn):
             if record['id'] in frozen else record
             for record in factor_records
         ]
-    if not event_mode:
-        event_features = [record['name'] for record in factor_records if factors.resolve(record)[0].scope == 'event']
-        if event_features:
-            names = '、'.join(event_features)
-            raise ValueError(f'「{names}」需要缠论买卖点，请取消选择或使用事件采样')
+    planning.validate_features(factor_records, trigger)
     manifest = factors.build_manifest(factor_records)
     if factor_set and factor_set.get('manifest_hash') not in (None, manifest.hash):
         raise ValueError('因子集清单已变化，请重新保存因子集')
@@ -675,6 +702,8 @@ def create_experiment(inp: ExperimentIn):
         except importlib.metadata.PackageNotFoundError:
             pass
     config = {**inp.model_dump(), 'factor_ids': factor_ids,
+              'trigger': trigger, 'sample_mode': sample_mode,
+              'auto_backtest': inp.auto_backtest and sample_mode == 'bar' and target['task'] != 'multiclass',
               'target_version': target['version'], 'target_params': target.get('params', {}),
               'model_params': model_config.resolve(inp.model, target['task'], inp.model_params)}
     snapshot = {
@@ -691,9 +720,9 @@ def create_experiment(inp: ExperimentIn):
         'split': 'chronological 60/20/20; purge labels reaching next split; train-only scaling',
     }
     snapshot['research_plan'] = planning.compile_plan(config, target)
-    if event_mode:
-        config['event_types'] = event_types
-        snapshot['chan'] = {'version': chan_events.VERSION, 'upstream': chan_events.UPSTREAM, 'config': dict(chan_events.CONFIG)}
+    if triggers.source(trigger) == 'chan':
+        config['event_types'] = trigger['rule']['params']['types']
+        snapshot['chan'] = triggers.chan_snapshot()
     if sum(bool(source) for source in (inp.market_range, inp.source_experiment_id, inp.dataset_id)) != 1:
         raise ValueError('请选择一份实验行情')
     experiment_id = uuid.uuid4().hex

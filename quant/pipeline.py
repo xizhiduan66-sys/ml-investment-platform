@@ -4,7 +4,7 @@ from . import models
 from .contracts import PredictionSet
 
 
-def train_and_predict(config, task, partitions, progress, seed=42):
+def train_and_predict(config, task, partitions, progress, seed=42, *, classes=()):
     if set(partitions) != {'train', 'valid', 'test'}:
         raise ValueError('必须提供训练、验证和测试分区')
     ids = [set(partitions[name].sample_ids) for name in ('train', 'valid', 'test')]
@@ -12,16 +12,20 @@ def train_and_predict(config, task, partitions, progress, seed=42):
         raise ValueError('样本不能跨分区重复')
     expected = 3 if models.is_sequence(config['model']) else 2
     train, valid = partitions['train'], partitions['valid']
+    if task == 'multiclass' and (len(classes) < 3 or set(train.labels) != set(range(len(classes)))):
+        raise ValueError('训练集未覆盖全部类别，请调整收益分档边界或扩大行情区间')
     for dataset in partitions.values():
         if dataset.values.ndim != expected or dataset.values.shape[1:] != train.values.shape[1:]:
             raise ValueError('模型输入布局或特征维度不一致')
         if task == 'binary' and not np.isin(dataset.labels, [0, 1]).all():
             raise ValueError('二分类标签必须为 0 或 1')
+        if task == 'multiclass' and not np.isin(dataset.labels, range(len(classes))).all():
+            raise ValueError('标签不在目标定义的类别范围内')
     fitted = models.fit(config['model'], task, train.values, train.labels,
                         valid.values, valid.labels, config['epochs'], progress,
                         seed=seed, model_params=config.get('model_params'))
+    semantic = {'regression': 'value', 'binary': 'probability', 'multiclass': 'class_probabilities'}[task]
     output = {name: PredictionSet(dataset.sample_ids, np.asarray(fitted.predict(dataset.values)),
-                                 'probability' if task == 'binary' else 'value',
-                                 1 if task == 'binary' else None)
+                                 semantic, 1 if task == 'binary' else None, classes)
               for name, dataset in partitions.items()}
     return fitted, output
