@@ -555,7 +555,7 @@ function backtestChart(r){
 }
 function backtestExecutionPanel(current){
   const r=current.result,c=r.config||current.config||{},orders=r.orders||[];
-  return `<details class="panel"><summary class="panel-head"><h2>执行配置与订单明细</h2><span class="selection-hint">${orders.length} 笔成交订单 · 点击展开</span></summary><div class="panel-body"><div class="detail-note">${current.source?.experiment_id?`实验 ${esc(current.source.experiment_name||current.source.experiment_id)} · 运行 ${esc(current.source.run_id||'历史运行')} · 做多阈值 ${esc(current.source.threshold)}${current.source.strategy?.short_threshold!=null?' · 做空阈值 '+esc(current.source.strategy.short_threshold):''}<br>`:''}手续费 ${fmt(c.fee_bps,1)} bps / 滑点 ${fmt(c.slippage_bps,1)} bps / 仓位 ${pct(c.position_pct)}<br>止损 ${c.stop_loss_pct?pct(c.stop_loss_pct):'关闭'} / 止盈 ${c.take_profit_pct?pct(c.take_profit_pct):'关闭'} / 最大持有 ${c.max_hold_bars?c.max_hold_bars+' 根':'不限'}<br>下一根开盘成交；期末收盘平仓。以下展示最近 50 笔订单。</div><div class="table-wrap"><table><thead><tr><th>信号时间</th><th>成交时间</th><th>方向</th><th>成交价格</th><th>数量</th><th>手续费</th><th>原因</th></tr></thead><tbody>${orders.slice(-50).reverse().map(o=>`<tr><td>${esc(o.signal_time)}</td><td>${esc(o.time)}</td><td>${o.side==='buy'?'买入':'卖出'}</td><td>${money(o.price)}</td><td>${fmt(o.qty,6)}</td><td>${money(o.fee)}</td><td>${esc(o.reason)}</td></tr>`).join('')||'<tr><td colspan="7">没有成交订单</td></tr>'}</tbody></table></div></div></details>`;
+  return `<details class="panel"><summary class="panel-head"><h2>执行配置与订单明细</h2><span class="selection-hint">${orders.length} 笔成交订单 · 点击展开</span></summary><div class="panel-body"><div class="detail-note">${current.source?.experiment_id?`实验 ${esc(current.source.experiment_name||current.source.experiment_id)} · 运行 ${esc(current.source.run_id||'历史运行')} · ${current.source.strategy?.id==='structure_confirmation'?'结构确认阈值':'做多阈值'} ${esc(current.source.threshold)}${current.source.strategy?.short_threshold!=null?' · 做空阈值 '+esc(current.source.strategy.short_threshold):''}<br>`:''}手续费 ${fmt(c.fee_bps,1)} bps / 滑点 ${fmt(c.slippage_bps,1)} bps / 仓位 ${pct(c.position_pct)}<br>止损 ${c.stop_loss_pct?pct(c.stop_loss_pct):'关闭'} / 止盈 ${c.take_profit_pct?pct(c.take_profit_pct):'关闭'} / 最大持有 ${c.max_hold_bars?c.max_hold_bars+' 根':'不限'}<br>下一根开盘成交；期末收盘平仓。以下展示最近 50 笔订单。</div><div class="table-wrap"><table><thead><tr><th>信号时间</th><th>成交时间</th><th>方向</th><th>成交价格</th><th>数量</th><th>手续费</th><th>原因</th></tr></thead><tbody>${orders.slice(-50).reverse().map(o=>`<tr><td>${esc(o.signal_time)}</td><td>${esc(o.time)}</td><td>${o.side==='buy'?'买入':'卖出'}</td><td>${money(o.price)}</td><td>${fmt(o.qty,6)}</td><td>${money(o.fee)}</td><td>${esc(o.reason)}</td></tr>`).join('')||'<tr><td colspan="7">没有成交订单</td></tr>'}</tbody></table></div></div></details>`;
 }
 function backtestReport(current){
   const r=current.result,m=r.metrics;
@@ -581,8 +581,16 @@ function backtestReport(current){
     kpi('索提诺',fmt(m.sortino,2)),
     kpi('卡玛',fmt(m.calmar,2))
   ].join('');
-  const rowsHtml=shown.length?shown.map(t=>`<tr><td>${date(t.entry_time)}</td><td>${date(t.exit_time)}</td><td>${fmt(t.entry_price,2)}</td><td>${fmt(t.exit_price,2)}</td><td>${fmt(t.qty,6)}</td><td class="${t.pnl>=0?'positive':'negative'}">${money(t.pnl)}</td><td>${t.hold_bars}</td><td>${esc(t.exit_reason)}</td></tr>`).join(''):'<tr><td colspan="9" class="empty">没有匹配的成交</td></tr>';
-  return `<div class="page-head"><div><h1>${esc(current.name)}</h1><p class="sub">订单级回测 · ${date(r.period?.start)} – ${date(r.period?.end)} · ${date(current.created_at)} · ${esc(current.engine_version||'旧版引擎')}</p></div><div class="actions"><button class="btn" data-action="backtest-close">× 关闭报告</button></div></div><div class="stats five compact">${stats}</div><section class="panel"><div class="panel-head"><h2>净值曲线</h2>${legend([{name:'策略净值'},{name:'买入持有',color:'#8d9bb1'},{name:'入场',color:'#159c80'},{name:'离场',color:'#ce5965'}])}</div><div class="panel-body">${backtestChart(r)}<div class="chart-caption"><span>绿色三角入场 · 红色三角离场</span><span>${date(r.period?.start)} → ${date(r.period?.end)}</span></div></div></section><section class="panel"><div class="panel-head"><h2>持仓与标的收益</h2><span class="badge gray">期末已平仓 · ${holding.trade_count} 笔往返交易</span></div><div class="panel-body"><div class="summary-row"><div class="summary-item"><span>市值</span><b>${money(holding.market_value)}</b></div><div class="summary-item"><span>初始资金</span><b>${money(m.initial_cash)}</b></div><div class="summary-item"><span>手续费</span><b>${money(holding.fees)}</b></div></div><div class="table-wrap"><table><thead><tr><th>标的代码</th><th>标的名称</th><th>方向</th><th>交易总笔数</th><th>最终收益</th></tr></thead><tbody><tr><td>${esc(holding.symbol)}</td><td>${esc(holding.name)}</td><td>${esc(holding.direction)}</td><td>${holding.trade_count}</td><td class="${holding.realized_pnl>=0?'positive':'negative'}">${money(holding.realized_pnl)}</td></tr></tbody></table></div></div></section><section class="panel"><div class="panel-head"><h2>成交记录</h2><div class="pager">共 ${filtered.length} 条 ${pageButtons}</div></div><div class="panel-body"><div class="table-toolbar"><input class="table-search" id="bt-search" placeholder="搜索日期 / 原因" value="${esc(btQuery)}"><div class="pager">第 ${page} / ${pages} 页</div></div><div class="table-wrap"><table><thead><tr><th>入场</th><th>出场</th><th>方向</th><th>入场价</th><th>出场价</th><th>数量</th><th>收益</th><th>持有</th><th>原因</th></tr></thead><tbody>${rowsHtml}</tbody></table></div></div></section>${backtestExecutionPanel(current)}`;
+  const eventMode=Array.isArray(r.event_log);
+  const predictionText=value=>Array.isArray(value)?value.map(p=>pct(p)).join(' / '):fmt(value,4);
+  const entryDetail=t=>eventMode?`<td>${(t.entry_events||[]).map(e=>`<div>${esc(e.observed_at)} · ${esc(e.event_id)}<br>预测 ${esc(predictionText(e.prediction))}</div>`).join('')}</td>`:'';
+  const eventCounts={entered:'触发入场',below_threshold:'未达阈值',position_open:'持仓中跳过',direction_conflict:'同根方向冲突',end_of_test:'已到期末',insufficient_cash:'可用资金不足'};
+  const counts=new Map();
+  for(const event of (r.event_log||[]))counts.set(event.status,(counts.get(event.status)||0)+1);
+  const auditRows=(r.event_log||[]).slice(-50).reverse().map(e=>`<tr><td>${esc(e.observed_at)}</td><td>${esc(e.event_id)}</td><td>${esc(predictionText(e.prediction))}</td><td>${esc(eventCounts[e.status]||e.status)}</td></tr>`).join('');
+  const eventSummary=eventMode?`<details class="panel"><summary class="panel-head"><h2>事件处理</h2><span>最近 50 条</span></summary><div class="panel-body"><p>${[...counts].map(([key,n])=>`${eventCounts[key]} ${n}`).join(' · ')}</p><div class="table-wrap"><table><thead><tr><th>首次可见时间</th><th>事件</th><th>预测</th><th>处理结果</th></tr></thead><tbody>${auditRows}</tbody></table></div></div></details>`:'';
+  const rowsHtml=shown.length?shown.map(t=>`<tr><td>${date(t.entry_time)}</td><td>${date(t.exit_time)}</td><td>${t.direction==='short'?'做空':'做多'}</td>${entryDetail(t)}<td>${fmt(t.entry_price,2)}</td><td>${fmt(t.exit_price,2)}</td><td>${fmt(t.qty,6)}</td><td class="${t.pnl>=0?'positive':'negative'}">${money(t.pnl)}</td><td>${t.hold_bars}</td><td>${esc(t.exit_reason)}</td></tr>`).join(''):'<tr><td colspan="${eventMode?10:9}" class="empty">没有匹配的成交</td></tr>';
+  return `<div class="page-head"><div><h1>${esc(current.name)}</h1><p class="sub">订单级回测 · ${date(r.period?.start)} – ${date(r.period?.end)} · ${date(current.created_at)} · ${esc(current.engine_version||'旧版引擎')}</p></div><div class="actions"><button class="btn" data-action="backtest-close">× 关闭报告</button></div></div><div class="stats five compact">${stats}</div><section class="panel"><div class="panel-head"><h2>净值曲线</h2>${legend([{name:'策略净值'},{name:'买入持有',color:'#8d9bb1'},{name:'入场',color:'#159c80'},{name:'离场',color:'#ce5965'}])}</div><div class="panel-body">${backtestChart(r)}<div class="chart-caption"><span>绿色三角入场 · 红色三角离场</span><span>${date(r.period?.start)} → ${date(r.period?.end)}</span></div></div></section><section class="panel"><div class="panel-head"><h2>持仓与标的收益</h2><span class="badge gray">期末已平仓 · ${holding.trade_count} 笔往返交易</span></div><div class="panel-body"><div class="summary-row"><div class="summary-item"><span>市值</span><b>${money(holding.market_value)}</b></div><div class="summary-item"><span>初始资金</span><b>${money(m.initial_cash)}</b></div><div class="summary-item"><span>手续费</span><b>${money(holding.fees)}</b></div></div><div class="table-wrap"><table><thead><tr><th>标的代码</th><th>标的名称</th><th>方向</th><th>交易总笔数</th><th>最终收益</th></tr></thead><tbody><tr><td>${esc(holding.symbol)}</td><td>${esc(holding.name)}</td><td>${esc(holding.direction)}</td><td>${holding.trade_count}</td><td class="${holding.realized_pnl>=0?'positive':'negative'}">${money(holding.realized_pnl)}</td></tr></tbody></table></div></div></section><section class="panel"><div class="panel-head"><h2>成交记录</h2><div class="pager">共 ${filtered.length} 条 ${pageButtons}</div></div><div class="panel-body"><div class="table-toolbar"><input class="table-search" id="bt-search" placeholder="搜索日期 / 原因" value="${esc(btQuery)}"><div class="pager">第 ${page} / ${pages} 页</div></div><div class="table-wrap"><table><thead><tr><th>入场</th><th>出场</th><th>方向</th>${eventMode?'<th>触发事件与预测</th>':''}<th>入场价</th><th>出场价</th><th>数量</th><th>收益</th><th>持有</th><th>原因</th></tr></thead><tbody>${rowsHtml}</tbody></table></div></div></section>${eventSummary}${backtestExecutionPanel(current)}`;
 }
 async function backtestPage(){
   if(backtestResult){
@@ -604,16 +612,16 @@ async function backtestPage(){
   backtestSeed=null;
   backtestRunSeed=null;
   if(!experiments.length){
-    $('#app').innerHTML=head('运行回测','')+prerequisite('需要已完成的逐 K 线收益预测实验。','experiment-center','查看实验');
+    $('#app').innerHTML=head('运行回测','')+prerequisite('需要已完成的收益预测或结构确认实验。','experiment-center','查看实验');
     return;
   }
   $('#app').innerHTML=head('运行回测','订单级执行：收盘信号、下一根开盘成交，含手续费、滑点、止损止盈。','<button class="btn" data-page="backtest-center">返回回测中心</button>')
     +`<section class="panel"><div class="panel-head"><h2>回测配置</h2><span class="badge gray">样本外预测</span></div><div class="panel-body"><form id="backtest-form">`
     +`<div class="form-grid">${selectField('实验','experiment_id',experiments.map(e=>`<option value="${esc(e.id)}" ${e.id===selectedExperiment?'selected':''}>${esc(e.name)}</option>`).join(''))}${selectField('运行记录','run_id','')}</div>
       <p id="prediction-context" class="detail-note"></p><fieldset id="execution-settings" disabled>
-      <legend>交易策略</legend><div class="form-grid">${selectField('预测如何转换为持仓','strategy','')}${field('做多阈值','threshold','','number','step="any" required')}${field('做空阈值','short_threshold','','number','step="any" required')}</div>
+      <legend id="strategy-heading">交易策略</legend><div class="form-grid">${selectField('预测如何转换为持仓','strategy','')}${field('做多阈值','threshold','','number','step="any" required')}${field('做空阈值','short_threshold','','number','step="any" required')}</div>
       <p class="detail-note" id="signal-rule" aria-live="polite"></p>
-      <h3>执行参数</h3>${field('回测名称','name','','text','required maxlength="100"')}
+      <h3 id="exit-heading">执行参数</h3><p id="event-exit-rule" class="detail-note" hidden>持仓期间忽略新事件。止盈、止损或最长持有期任一触发即可离场，至少启用一项。</p>${field('回测名称','name','','text','required maxlength="100"')}
       <div class="form-grid">${field('初始资金','initial_cash','','number','min="0.00000001" step="any" required')}${field('手续费（bps）','fee_bps','','number','min="0" max="1000" step="any" required')}${field('滑点（bps）','slippage_bps','','number','min="0" max="1000" step="any" required')}${field('仓位比例','position_pct','','number','min="0.00000001" max="1" step="any" required')}</div>
       <div class="form-grid">${field('止损（比例，0 关闭）','stop_loss_pct','','number','min="0" max="0.9" step="any" required')}${field('止盈（比例，0 关闭）','take_profit_pct','','number','min="0" max="10" step="any" required')}${field('最大持有根数（0 关闭）','max_hold_bars','','number','min="0" max="1000" step="1" required')}</div></fieldset>`
     +`<div class="actions"><button class="btn primary" type="submit">运行回测</button><span class="selection-hint">信号在收盘产生，下一根开盘成交；止损/止盈用当根 high/low 触发。</span></div><div class="error" id="backtest-error"></div></form></div></section>`;
@@ -636,22 +644,28 @@ async function backtestPage(){
       form.elements.name.value=(selected.name+' · 回测').slice(0,100);
       const task=selected.snapshot.target?.task||'binary';
       const multi=task==='multiclass', regression=task==='regression';
+      const event=isEventExperiment(selected.snapshot), structure=selected.snapshot.target?.kind==='chan_structure';
+      $('#strategy-heading').textContent=event?'事件开仓条件':'交易策略';
+      $('#exit-heading').textContent=event?'平仓条件与执行参数':'执行参数';
+      $('#event-exit-rule').hidden=!event;
+      form.querySelector('label[for="threshold"]').textContent=structure?'结构确认概率阈值':'做多阈值';
       const strategy=form.elements.strategy, upper=form.elements.threshold, lower=form.elements.short_threshold;
-      strategy.innerHTML=multi?'<option value="return_band">涨跌分档概率 · 多空</option>':
+      strategy.innerHTML=structure?'<option value="structure_confirmation">按买卖点方向开仓</option>':multi?'<option value="return_band">涨跌分档概率 · 多空</option>':
         `<option value="long_short">${regression?'预测收益率':'正类概率'} · 多空</option><option value="long_flat">仅做多 / 空仓</option>`;
       upper.min=lower.min=regression?-1:0;
       upper.max=lower.max=1;
       lower.value=multi?upper.value:regression?Math.min(0,-Number(upper.value)):Math.min(Number(upper.value),Number((1-upper.value).toFixed(6)));
       const describe=()=>{
-        const both=strategy.value!=='long_flat';
+        const both=!structure&&strategy.value!=='long_flat';
         lower.disabled=!both;
         lower.closest('.field').hidden=!both;
         lower.setCustomValidity(both&&!multi&&Number(lower.value)>Number(upper.value)?'做空阈值不能高于做多阈值。':'');
         const target=selected.snapshot.target;
         const metric=regression?'预测收益率（小数）':`未来收益超过 ${pct(target?.threshold??target?.params?.threshold??0)} 的预测概率`;
-        $('#signal-rule').textContent=multi?
-          `上涨概率唯一最高且 > ${upper.value} 做多；下跌概率唯一最高且 > ${lower.value} 做空；其余空仓。`:
-          `${metric} > ${upper.value} 做多；${both?`低于 ${lower.value} 做空；`:''}其余空仓。`;
+        $('#signal-rule').textContent=structure?
+          `结构确认概率 > ${upper.value} 时，买点做多、卖点做空；其余跳过。`:multi?
+          `上涨概率唯一最高且 > ${upper.value} 做多；下跌概率唯一最高且 > ${lower.value} 做空；其余${event?'跳过':'空仓'}。`:
+          `${metric} > ${upper.value} 做多；${both?`低于 ${lower.value} 做空；`:''}其余${event?'跳过':'空仓'}。`;
       };
       strategy.onchange=upper.oninput=lower.oninput=describe;
       describe();
@@ -661,7 +675,7 @@ async function backtestPage(){
   }
   async function chooseExperiment(preferred){
     const request=pending(), selected=experiments.find(e=>e.id===experiment.value);
-    $('#prediction-context').textContent=[selected.snapshot.dataset.name,selected.snapshot.target?.name,selected.snapshot.config.model,'测试集预测'].filter(Boolean).join(' · ');
+    $('#prediction-context').textContent=[selected.snapshot.dataset.name,selected.snapshot.target?.name,selected.snapshot.config.model,isEventExperiment(selected.snapshot)?'测试集事件预测':'测试集逐 K 线预测'].filter(Boolean).join(' · ');
     run.disabled=true;
     run.innerHTML='<option value="">正在读取运行记录…</option>';
     try{
@@ -825,9 +839,12 @@ function snapshotDialog(symbol,period,coverage){
     <p class="sub">选定区间需已完整入库，并包含至少 300 根 K 线。时间按所选周期对齐。</p>`,'market-snapshot');
 }
 
-function supportsPredictionBacktest(snapshot){
+function isEventExperiment(snapshot){
   const config=snapshot.config;
-  return (config.trigger?.kind||((config.sample_mode??'bar')==='bar'?'bar':'event'))==='bar'&&['regression','binary','multiclass'].includes(snapshot.target?.task||'binary');
+  return (config.trigger?.kind||((config.sample_mode??'bar')==='bar'?'bar':'event'))==='event';
+}
+function supportsPredictionBacktest(snapshot){
+  return ['regression','binary','multiclass'].includes(snapshot?.target?.task||'binary');
 }
 function predictionTable(result){
   const classes=result.output.classes||[], isMulti=result.output.task==='multiclass';

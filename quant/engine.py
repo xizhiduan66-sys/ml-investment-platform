@@ -125,7 +125,7 @@ def run(experiment_id):
             experiment_id, snap['dataset'], task, triggers.sample_mode(trigger), prediction_rows,
             output=output if config.get('trigger') or task == 'multiclass' else None)
         can_trade = policies.supports_backtest(triggers.sample_mode(trigger), task)
-        result['backtest_available'] = can_trade
+        result['backtest_available'] = can_trade or event_mode or task == 'multiclass'
         test_rows = [row for row in prediction_rows if row['split'] == 'test']
         if event_mode:
             diagnostics['notes'].append('事件按首次可见时间归入分区，标签跨界的样本已剔除。')

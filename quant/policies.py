@@ -83,17 +83,46 @@ def threshold_policy(task, config, threshold=None):
     return ThresholdPolicy(task, float(threshold))
 
 
+def _prediction(row, policy):
+    key = 'probabilities' if policy.task == 'multiclass' else 'prediction'
+    return row.get(key) if row.get('valid_prediction', True) else None
+
+
+def _bar_index(row, lo, hi):
+    index = row.get('bar_index')
+    if type(index) is not int or not lo <= index < hi:
+        raise ValueError('预测索引无效或之后没有可成交 K 线')
+    return index
+
+
+def event_entries(rows, policy, start, end, structure_events=None):
+    if not rows:
+        raise ValueError('实验没有样本外事件预测')
+    predictions = [_prediction(row, policy) for row in rows]
+    by_bar = {}
+    for row, value, weight in zip(rows, predictions, policy.weights(predictions)):
+        index = _bar_index(row, start, end + 1)
+        event = (structure_events or {}).get(row['sample_id'], {})
+        direction = int(weight)
+        if structure_events is not None:
+            side = event.get('side')
+            if side not in ('buy', 'sell') or event.get('observed_at') != index:
+                raise ValueError('结构预测缺少同一观测时点的买卖点记录')
+            direction *= 1 if side == 'buy' else -1
+        by_bar.setdefault(index, []).append({
+            'event_id': row['sample_id'], 'observed_at': row['observed_at'],
+            'prediction': value, 'direction': direction,
+        })
+    return by_bar
+
+
 def bar_positions(df, rows, policy):
     if not rows:
         raise ValueError('实验没有样本外预测')
     indices, predictions = [], []
     for row in rows:
-        index = row.get('bar_index')
-        if isinstance(index, bool) or not isinstance(index, int) or not 0 <= index < len(df) - 1:
-            raise ValueError('预测索引无效或之后没有可成交 K 线')
-        indices.append(index)
-        key = 'probabilities' if policy.task == 'multiclass' else 'prediction'
-        predictions.append(row.get(key) if row.get('valid_prediction', True) else None)
+        indices.append(_bar_index(row, 0, len(df) - 1))
+        predictions.append(_prediction(row, policy))
     if len(set(indices)) != len(indices):
         raise ValueError('预测 K 线索引重复')
     signal = pd.Series(0., index=df.index, dtype='float64')

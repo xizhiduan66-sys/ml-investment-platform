@@ -9,7 +9,7 @@ import math
 import pandas as pd
 import numpy as np
 
-ENGINE_VERSION = 'order-v3'
+ENGINE_VERSION = 'order-v4'
 
 
 @dataclass(frozen=True)
@@ -53,7 +53,7 @@ def _date(df, index):
     return str(index)
 
 
-def run(df, signals, config, start_index=None, end_index=None):
+def run(df, signals, config, start_index=None, end_index=None, *, event_entries=None):
     config.validate()
     required = {'open', 'high', 'low', 'close'}
     if not required.issubset(df.columns):
@@ -87,6 +87,9 @@ def run(df, signals, config, start_index=None, end_index=None):
     stop_price = take_price = None
     bars_held = 0
     pending = None
+    event_mode = event_entries is not None
+    event_log = []
+    pending_events = entry_events = ()
     rows = []
     trades = []
     orders = []
@@ -129,6 +132,9 @@ def run(df, signals, config, start_index=None, end_index=None):
             'hold_bars': int(i - entry_index) if entry_index is not None else 0,
             'exit_reason': reason,
         }
+        if event_mode:
+            trade['entry_events'] = entry_events
+            trade['hold_bars'] += order_type != 'market'
         add_order('sell' if qty > 0 else 'buy', order_type, signal_time, _date(df, i), exec_price, abs(qty), exit_fee, reason, pnl)
         trades.append(trade)
         qty = 0.0
@@ -174,6 +180,14 @@ def run(df, signals, config, start_index=None, end_index=None):
                     row_fee += fee
                     last_fill = exec_price
                     add_order('buy' if direction > 0 else 'sell', 'market', _date(df, i - 1), _date(df, i), exec_price, quantity, fee, reason)
+                    if event_mode:
+                        entry_events = pending_events
+                        for event in entry_events:
+                            event.update(status='entered', entry_time=entry_time)
+            for event in pending_events:
+                if event['status'] == 'scheduled':
+                    event.update(status='insufficient_cash')
+            pending_events = ()
 
         exposed = qty != 0.0
         if exposed:
@@ -231,7 +245,31 @@ def run(df, signals, config, start_index=None, end_index=None):
             'trade_pnl': None if realized is None else float(realized),
         })
 
-        if i < end:
+        if event_mode:
+            events = [{**event, 'status': 'below_threshold'} for event in event_entries.get(i, ())]
+            event_log.extend(events)
+            qualified = [event for event in events if event['direction']]
+            directions = {event['direction'] for event in qualified}
+            pending = None
+            if qty:
+                status = 'position_open'
+                if i < end and config.max_hold_bars and bars_held >= config.max_hold_bars:
+                    pending = (0, '达到最大持有')
+            elif i == end:
+                status = 'end_of_test'
+            elif len(directions) > 1:
+                status = 'direction_conflict'
+            elif qualified:
+                direction = qualified[0]['direction']
+                pending = (direction, '事件做多' if direction > 0 else '事件做空')
+                pending_events = qualified
+                rows[-1]['signal'] = direction
+                status = 'scheduled'
+            else:
+                status = 'below_threshold'
+            for event in qualified:
+                event['status'] = status
+        elif i < end:
             direction = int(np.sign(signal.iloc[i]))
             held = int(np.sign(qty))
             if direction != held:
@@ -313,6 +351,7 @@ def run(df, signals, config, start_index=None, end_index=None):
     }
     return {
         'engine_version': ENGINE_VERSION,
+        **({'event_log': event_log} if event_mode else {}),
         'rows': rows,
         'trades': trades,
         'orders': orders,

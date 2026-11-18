@@ -35,7 +35,7 @@ def publish(experiment_id, dataset, task, sampling, rows, *, output=None):
     return {'version': version, 'file': name, 'sha256': hashlib.sha256(content).hexdigest()}
 
 
-def load(reference, experiment_id, dataset, task):
+def load(reference, experiment_id, dataset, task, *, sampling='bar'):
     expected_name = experiment_id + '.predictions.json'
     version = reference.get('version')
     if version not in (1, 2) or reference.get('file') != expected_name:
@@ -47,8 +47,8 @@ def load(reference, experiment_id, dataset, task):
     if (payload.get('version') != version or payload.get('experiment_id') != experiment_id or
             payload.get('dataset_sha256') != dataset['sha256'] or payload.get('task') != task):
         raise ValueError('预测产物与实验或数据不一致')
-    if payload.get('sampling') != 'bar':
-        raise ValueError('事件预测需要独立的交易执行规则')
+    if payload.get('sampling') != sampling:
+        raise ValueError('预测产物采样方式与实验不一致')
     if task == 'multiclass' and payload.get('classes') != ['下跌', '横盘', '上涨']:
         raise ValueError('多分类交易需要下跌、横盘、上涨三个有序类别')
     rows = [row for row in payload['rows'] if row['split'] == 'test']

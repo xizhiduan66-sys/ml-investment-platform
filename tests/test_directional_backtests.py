@@ -38,3 +38,33 @@ class DirectionalBacktestTest(unittest.TestCase):
         self.assertAlmostEqual(trade['exit_price'], 110.11)
         self.assertAlmostEqual(result['metrics']['final_equity'], 100 + trade['pnl'])
         self.assertGreater(trade['fee'], 0)
+
+    def test_sparse_events_hold_through_gaps_and_record_skips(self):
+        frame = pd.DataFrame({key: [100.] * 9 for key in ('open', 'high', 'low', 'close')})
+        entries = {
+            0: [{'event_id': 'a', 'direction': 1}, {'event_id': 'b', 'direction': 1}],
+            2: [{'event_id': 'c', 'direction': -1}],
+            4: [{'event_id': 'd', 'direction': 1}, {'event_id': 'e', 'direction': -1}],
+            6: [{'event_id': 'f', 'direction': -1}],
+            8: [{'event_id': 'g', 'direction': 1}],
+        }
+        result = run(frame, [0.] * len(frame), BacktestConfig(max_hold_bars=3), event_entries=entries)
+        first, last = result['trades']
+        self.assertEqual((first['entry_time'], first['exit_time'], first['hold_bars']), ('1', '4', 3))
+        self.assertEqual([event['event_id'] for event in first['entry_events']], ['a', 'b'])
+        self.assertEqual(first['exit_reason'], '达到最大持有')
+        self.assertEqual(last['direction'], 'short')
+        self.assertEqual(last['exit_reason'], '期末平仓')
+        self.assertEqual([event['status'] for event in result['event_log']],
+                         ['entered', 'entered', 'position_open', 'direction_conflict',
+                          'direction_conflict', 'entered', 'end_of_test'])
+
+    def test_structure_probability_filters_events_without_reversing_their_side(self):
+        from quant.policies import ThresholdPolicy, event_entries
+
+        rows = [{'sample_id': key, 'bar_index': 2, 'observed_at': 'bar 2', 'prediction': value}
+                for key, value in [('sell_high', .8), ('buy_low', .2)]]
+        events = {'sell_high': {'side': 'sell', 'observed_at': 2},
+                  'buy_low': {'side': 'buy', 'observed_at': 2}}
+        entries = event_entries(rows, ThresholdPolicy('binary', .6), 0, 4, events)
+        self.assertEqual([event['direction'] for event in entries[2]], [-1, 0])

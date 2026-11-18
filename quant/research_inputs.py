@@ -8,7 +8,7 @@ class BacktestIn(BaseModel):
     source: Literal['experiment'] = 'experiment'
     experiment_id: str = Field(min_length=1)
     run_id: Optional[str] = None
-    strategy: Literal['long_flat', 'long_short', 'return_band'] = 'long_flat'
+    strategy: Literal['long_flat', 'long_short', 'return_band', 'structure_confirmation'] = 'long_flat'
     short_threshold: Optional[float] = Field(default=None, ge=-1, le=1)
     threshold: Optional[float] = Field(default=None, ge=-1, le=1)
     initial_cash: Optional[float] = Field(default=None, gt=0, le=1e12)

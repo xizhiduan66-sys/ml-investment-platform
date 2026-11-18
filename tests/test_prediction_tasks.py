@@ -84,12 +84,17 @@ class PredictionTasksTest(unittest.TestCase):
                         self.assertEqual(finished['snapshot']['config']['trigger']['rule'],
                                          {key: value for key, value in rule.items() if key != 'created_at'})
                         self.assertEqual(result['kind'], 'event')
-                        self.assertFalse(result['backtest_available'])
+                        self.assertTrue(result['backtest_available'])
                         split = result['diagnostics']['splits']['test']
                         self.assertEqual(sum(split['class_counts']), split['count'])
                         self.assertAlmostEqual(sum(artifact['rows'][0]['probabilities']), 1.)
-                        with self.assertRaisesRegex(ValueError, '独立'):
-                            create_backtest(BacktestIn(name='交易', source='experiment', experiment_id=job['id']))
+                        replay = create_backtest(BacktestIn(name='事件交易', experiment_id=job['id'],
+                                                            strategy='return_band', threshold=0, short_threshold=0))
+                        ledger = replay['result']
+                        self.assertEqual(len(ledger['event_log']), split['count'])
+                        self.assertEqual(replay['config']['max_hold_bars'], 5)
+                        self.assertGreater(len(ledger['trades']), 0)
+                        self.assertTrue(all(trade['entry_events'] for trade in ledger['trades']))
                     else:
                         execution = runs.list_for(job['id'])[0]
                         self.assertEqual(len(artifact['rows'][0]['probabilities']), 2)
