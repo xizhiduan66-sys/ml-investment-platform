@@ -1,7 +1,8 @@
-import {paramField,collectParams} from './parameter-fields.mjs';
+import {eventRuleSummary} from './event-rules.mjs?v=general-events-1';
+import {paramField,collectParams} from './parameter-fields.mjs?v=general-events-1';
 import {eventPanel} from './chan-events.mjs';
 import {groupedModels} from './model-catalog.mjs';
-import {mountExperimentWizard,collectModelParams,marketAuditText} from './experiment-wizard.mjs?v=prediction-tasks-1';
+import {mountExperimentWizard,collectModelParams,marketAuditText} from './experiment-wizard.mjs?v=general-events-1';
 import {renderDiagnostics} from './diagnostics.mjs?v=prediction-tasks-1';
 import {filterExperiments, comparisonDifferences, pageWindow, createRequestGate, pollTarget, categoryLabel} from './ui-state.mjs?v=research-centers-1';
 const $=s=>document.querySelector('#dialog[open]')?.querySelector(s)||document.querySelector(s), esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -27,9 +28,11 @@ const entryParams=new URLSearchParams(location.search);
 const requestedPage=entryParams.get('page');
 const entryPages=new Set(navigation.flatMap(([id,,children])=>[id,...children]));
 let catalog, page=requestedPage==='settings'?'factors':entryPages.has(requestedPage)?requestedPage:'experiment-center', category='', factorId, datasetId, selected=new Set(), detail=null, poll, toastTimer, activeChart=null, activeResize=null, backtestResult=null, btPage=1, btQuery='';
-let activeDiagnostics=null,diagnosticsSplit='valid',diagnosticsExperiment=null;
-let selectedRun=null, backtestRunSeed=null;
-let backtestEntrySource=page==='backtest'&&entryParams.get('source')==='experiment'?'experiment':null;
+function newDetailState(){
+  return {selectedRun:null, diagnostics:null, split:'valid', diagnosticsOwner:null};
+}
+let detailState=newDetailState();
+let backtestRunSeed=null;
 let experimentReturnPage='experiments', taskTemplateId=null;
 let renderVersion=0, experimentQuery='', experimentStatus='all', backtestSeed=null, pollBusy=false;
 const previewGate=createRequestGate(), labelGate=createRequestGate(), evaluationGate=createRequestGate(),comparisonGate=createRequestGate();
@@ -142,7 +145,7 @@ function backtestCenter(){
   const range=latest?.period?.start&&latest.period?.end?`${date(latest.period.start)} 至 ${date(latest.period.end)}`:date(latest?.created_at);
   $('#app').innerHTML=head('回测中心','')+`
     <div class="center-layout"><div>
-      ${centerAction('回测配置','选择信号来源，设置仓位、成本和风控。','运行回测','backtest')}
+      ${centerAction('回测配置','选择已完成的实验运行，使用样本外预测配置交易。','运行回测','backtest')}
       <section class="panel"><div class="panel-head"><h2>最近回测</h2><button class="table-link" data-page="backtest-history">查看历史 →</button></div>
         ${latest?`<div class="recent-row"><div><strong>${esc(latest.name)}</strong><small>${esc(range)}</small></div>
           <button class="table-link" data-backtest="${esc(latest.id)}">查看报告 →</button></div>
@@ -151,11 +154,7 @@ function backtestCenter(){
           '<div class="empty">还没有回测记录。</div>'}
       </section>
     </div><aside>
-      <section class="panel"><div class="panel-head"><h2>信号来源</h2></div>
-        ${resourceLink('SMA 规则','选择行情快照，设置快线和慢线','backtest','sma')}
-        ${resourceLink('实验预测','使用已完成的 K 线实验运行','backtest','experiment')}
-      </section><section class="panel"><div class="panel-head"><h2>回测准备</h2></div>
-        ${resourceLink('检查行情','查看 K 线和入库范围','data')}
+      <section class="panel"><div class="panel-head"><h2>实验结果</h2></div>
         ${resourceLink('查看实验','查找实验和训练结果','experiment-center')}
       </section>
     </aside></div>`;
@@ -260,7 +259,7 @@ async function factorPage(){
       <div class="panel-body"><p class="sub">${esc(chosen.description||specOf(chosen.spec_id||chosen.recipe)?.description||'')}</p>
       <div class="info-row"><span>计算参数</span><div class="actions">${esc(paramSummary(chosen))}
       ${specOf(chosen.spec_id||chosen.recipe)?.params?.length?'<button type="button" class="table-link" data-action="configure-feature">设置参数</button>':''}</div></div><div class="info-row"><span>使用条件</span>${event?'需要缠论事件采样':'每根 K 线可计算'}</div>
-      <div class="feature-preview-heading"><h3>人工备注</h3><button type="button" class="table-link" data-action="edit-feature-note">${chosen.note?'编辑备注':'添加备注'}</button></div>
+      <div class="feature-preview-heading"><h3>特征备注</h3><button type="button" class="table-link" data-action="edit-feature-note">${chosen.note?'编辑备注':'添加备注'}</button></div>
       ${chosen.note?`<p class="detail-note feature-note">${esc(chosen.note)}</p>`:''}
       ${event?`<p class="detail-note">按候选点首次出现的时间取值。</p>
       ${datasetId?`<div class="feature-preview-heading">${datasetSelect()}<button class="btn small" data-action="preview-event-feature">预览事件取值</button></div><div id="event-feature-preview"></div>`:prerequisite('先保存行情快照，再预览事件取值。','data','查看行情数据')}
@@ -283,11 +282,9 @@ function eventsPage(){
     <section class="panel"><div class="panel-head"><h2>事件规则</h2></div>
     ${rules.map(rule=>{
       const provider=providers.find(p=>p.id===rule.provider);
-      const params=Object.entries(rule.params).map(([key,value])=>key==='types'
-        ?value.map(id=>provider?.types?.[id]||id).join('、')
-        :`${provider?.parameters.find(param=>param.name===key)?.description||key} ${value}`).join(' · ');
+      const params=eventRuleSummary(rule,providers);
       return `<article class="task-row"><div><h3>${esc(rule.name)}</h3><p class="sub">${esc(provider?.description||'')}</p>
-        <p class="sub">${esc(params)} · v${esc(rule.version)}</p></div><div class="actions">
+        <p class="sub">${esc(params)}</p></div><div class="actions">
         <button class="table-link" data-preview-rule="${esc(rule.id)}">预览事件</button>
         <button class="btn small" data-copy-rule="${esc(rule.id)}">另存规则</button></div></article>`;
     }).join('')||'<div class="empty">暂无事件规则</div>'}</section>
@@ -318,10 +315,20 @@ async function previewRule(id){
   const {count,events}=await panelRequest(`/event-rules/${encodeURIComponent(id)}/preview/${encodeURIComponent(datasetId)}`,host,current);
   if(!current())return;
   const chan=rule.provider==='chan';
-  const types=catalog.events.providers.find(p=>p.id===rule.provider)?.types||{};
-  const rows=events.slice().reverse().map(event=>`<tr><td>${esc(event.observed_time)}</td><td>${chan?esc(types[`${event.type}:${event.side}`]):fmt(event.value,2)}</td>${chan?`<td>${esc(event.anchor_time)}</td>`:''}</tr>`).join('');
+  const provider=catalog.events.providers.find(p=>p.id===rule.provider);
+  const columns=chan?[{key:'event',label:'事件'},{key:'anchor_time',label:'结构时间（UTC）'}]:
+    provider?.preview_columns?.length?provider.preview_columns:[{key:'value',label:'观测值'}];
+  const format=(event,key)=>{
+    if(key==='event')return provider?.types?.[`${event.type}:${event.side}`]||'—';
+    if(key==='side')return {up:'上穿',down:'下穿'}[event.side]||'—';
+    const value=event[key];
+    if(typeof value==='number')return Number.isFinite(value)?value.toLocaleString('en-US',{maximumSignificantDigits:10}):'—';
+    return value??'—';
+  };
+  const rows=events.slice().reverse().map(event=>`<tr><td>${esc(event.observed_time)}</td>
+    ${columns.map(({key})=>`<td>${esc(format(event,key))}</td>`).join('')}</tr>`).join('');
   host.innerHTML=`<p class="sub">${esc(rule.name)} · 共 ${count} 次触发${count>events.length?' · 显示最近 '+events.length+' 条':''}</p>`+(rows
-    ?`<div class="table-wrap"><table><thead><tr><th>触发 K 线（UTC）</th><th>${chan?'事件':'触发时 RSI'}</th>${chan?'<th>结构时间（UTC）</th>':''}</tr></thead><tbody>${rows}</tbody></table></div>`
+    ?`<div class="table-wrap"><table><thead><tr><th>触发 K 线（UTC）</th>${columns.map(({label})=>`<th>${esc(label)}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table></div>`
     :'<p class="detail-note">这个区间没有触发。</p>');
 }
 
@@ -548,7 +555,7 @@ function backtestChart(r){
 }
 function backtestExecutionPanel(current){
   const r=current.result,c=r.config||current.config||{},orders=r.orders||[];
-  return `<details class="panel"><summary class="panel-head"><h2>执行配置与订单明细</h2><span class="selection-hint">${orders.length} 笔成交订单 · 点击展开</span></summary><div class="panel-body"><div class="detail-note">手续费 ${fmt(c.fee_bps,1)} bps / 滑点 ${fmt(c.slippage_bps,1)} bps / 仓位 ${pct(c.position_pct)}<br>止损 ${c.stop_loss_pct?pct(c.stop_loss_pct):'关闭'} / 止盈 ${c.take_profit_pct?pct(c.take_profit_pct):'关闭'} / 最大持有 ${c.max_hold_bars?c.max_hold_bars+' 根':'不限'}<br>下一根开盘成交；期末收盘平仓。以下展示最近 50 笔订单。</div><div class="table-wrap"><table><thead><tr><th>信号时间</th><th>成交时间</th><th>方向</th><th>成交价格</th><th>数量</th><th>手续费</th><th>原因</th></tr></thead><tbody>${orders.slice(-50).reverse().map(o=>`<tr><td>${esc(o.signal_time)}</td><td>${esc(o.time)}</td><td>${o.side==='buy'?'买入':'卖出'}</td><td>${money(o.price)}</td><td>${fmt(o.qty,6)}</td><td>${money(o.fee)}</td><td>${esc(o.reason)}</td></tr>`).join('')||'<tr><td colspan="7">没有成交订单</td></tr>'}</tbody></table></div></div></details>`;
+  return `<details class="panel"><summary class="panel-head"><h2>执行配置与订单明细</h2><span class="selection-hint">${orders.length} 笔成交订单 · 点击展开</span></summary><div class="panel-body"><div class="detail-note">${current.source?.experiment_id?`实验 ${esc(current.source.experiment_name||current.source.experiment_id)} · 运行 ${esc(current.source.run_id||'历史运行')} · 做多阈值 ${esc(current.source.threshold)}${current.source.strategy?.short_threshold!=null?' · 做空阈值 '+esc(current.source.strategy.short_threshold):''}<br>`:''}手续费 ${fmt(c.fee_bps,1)} bps / 滑点 ${fmt(c.slippage_bps,1)} bps / 仓位 ${pct(c.position_pct)}<br>止损 ${c.stop_loss_pct?pct(c.stop_loss_pct):'关闭'} / 止盈 ${c.take_profit_pct?pct(c.take_profit_pct):'关闭'} / 最大持有 ${c.max_hold_bars?c.max_hold_bars+' 根':'不限'}<br>下一根开盘成交；期末收盘平仓。以下展示最近 50 笔订单。</div><div class="table-wrap"><table><thead><tr><th>信号时间</th><th>成交时间</th><th>方向</th><th>成交价格</th><th>数量</th><th>手续费</th><th>原因</th></tr></thead><tbody>${orders.slice(-50).reverse().map(o=>`<tr><td>${esc(o.signal_time)}</td><td>${esc(o.time)}</td><td>${o.side==='buy'?'买入':'卖出'}</td><td>${money(o.price)}</td><td>${fmt(o.qty,6)}</td><td>${money(o.fee)}</td><td>${esc(o.reason)}</td></tr>`).join('')||'<tr><td colspan="7">没有成交订单</td></tr>'}</tbody></table></div></div></details>`;
 }
 function backtestReport(current){
   const r=current.result,m=r.metrics;
@@ -574,8 +581,8 @@ function backtestReport(current){
     kpi('索提诺',fmt(m.sortino,2)),
     kpi('卡玛',fmt(m.calmar,2))
   ].join('');
-  const rowsHtml=shown.length?shown.map(t=>`<tr><td>${date(t.entry_time)}</td><td>${date(t.exit_time)}</td><td>${fmt(t.entry_price,2)}</td><td>${fmt(t.exit_price,2)}</td><td>${fmt(t.qty,6)}</td><td class="${t.pnl>=0?'positive':'negative'}">${money(t.pnl)}</td><td>${t.hold_bars}</td><td>${esc(t.exit_reason)}</td></tr>`).join(''):'<tr><td colspan="8" class="empty">没有匹配的成交</td></tr>';
-  return `<div class="page-head"><div><h1>${esc(current.name)}</h1><p class="sub">订单级回测 · ${date(r.period?.start)} – ${date(r.period?.end)} · ${date(current.created_at)} · ${esc(current.engine_version||'旧版引擎')}</p></div><div class="actions"><button class="btn" data-action="backtest-close">× 关闭报告</button></div></div><div class="stats five compact">${stats}</div><section class="panel"><div class="panel-head"><h2>净值曲线</h2>${legend([{name:'策略净值'},{name:'买入持有',color:'#8d9bb1'},{name:'买入',color:'#159c80'},{name:'卖出',color:'#ce5965'}])}</div><div class="panel-body">${backtestChart(r)}<div class="chart-caption"><span>绿色三角买入 · 红色三角卖出</span><span>${date(r.period?.start)} → ${date(r.period?.end)}</span></div></div></section><section class="panel"><div class="panel-head"><h2>持仓与标的收益</h2><span class="badge gray">期末已平仓 · ${holding.trade_count} 笔往返交易</span></div><div class="panel-body"><div class="summary-row"><div class="summary-item"><span>市值</span><b>${money(holding.market_value)}</b></div><div class="summary-item"><span>初始资金</span><b>${money(m.initial_cash)}</b></div><div class="summary-item"><span>手续费</span><b>${money(holding.fees)}</b></div></div><div class="table-wrap"><table><thead><tr><th>标的代码</th><th>标的名称</th><th>方向</th><th>交易总笔数</th><th>最终收益</th></tr></thead><tbody><tr><td>${esc(holding.symbol)}</td><td>${esc(holding.name)}</td><td>${esc(holding.direction)}</td><td>${holding.trade_count}</td><td class="${holding.realized_pnl>=0?'positive':'negative'}">${money(holding.realized_pnl)}</td></tr></tbody></table></div></div></section><section class="panel"><div class="panel-head"><h2>成交记录</h2><div class="pager">共 ${filtered.length} 条 ${pageButtons}</div></div><div class="panel-body"><div class="table-toolbar"><input class="table-search" id="bt-search" placeholder="搜索日期 / 原因" value="${esc(btQuery)}"><div class="pager">第 ${page} / ${pages} 页</div></div><div class="table-wrap"><table><thead><tr><th>入场</th><th>出场</th><th>入场价</th><th>出场价</th><th>数量</th><th>收益</th><th>持有</th><th>原因</th></tr></thead><tbody>${rowsHtml}</tbody></table></div></div></section>${backtestExecutionPanel(current)}`;
+  const rowsHtml=shown.length?shown.map(t=>`<tr><td>${date(t.entry_time)}</td><td>${date(t.exit_time)}</td><td>${fmt(t.entry_price,2)}</td><td>${fmt(t.exit_price,2)}</td><td>${fmt(t.qty,6)}</td><td class="${t.pnl>=0?'positive':'negative'}">${money(t.pnl)}</td><td>${t.hold_bars}</td><td>${esc(t.exit_reason)}</td></tr>`).join(''):'<tr><td colspan="9" class="empty">没有匹配的成交</td></tr>';
+  return `<div class="page-head"><div><h1>${esc(current.name)}</h1><p class="sub">订单级回测 · ${date(r.period?.start)} – ${date(r.period?.end)} · ${date(current.created_at)} · ${esc(current.engine_version||'旧版引擎')}</p></div><div class="actions"><button class="btn" data-action="backtest-close">× 关闭报告</button></div></div><div class="stats five compact">${stats}</div><section class="panel"><div class="panel-head"><h2>净值曲线</h2>${legend([{name:'策略净值'},{name:'买入持有',color:'#8d9bb1'},{name:'入场',color:'#159c80'},{name:'离场',color:'#ce5965'}])}</div><div class="panel-body">${backtestChart(r)}<div class="chart-caption"><span>绿色三角入场 · 红色三角离场</span><span>${date(r.period?.start)} → ${date(r.period?.end)}</span></div></div></section><section class="panel"><div class="panel-head"><h2>持仓与标的收益</h2><span class="badge gray">期末已平仓 · ${holding.trade_count} 笔往返交易</span></div><div class="panel-body"><div class="summary-row"><div class="summary-item"><span>市值</span><b>${money(holding.market_value)}</b></div><div class="summary-item"><span>初始资金</span><b>${money(m.initial_cash)}</b></div><div class="summary-item"><span>手续费</span><b>${money(holding.fees)}</b></div></div><div class="table-wrap"><table><thead><tr><th>标的代码</th><th>标的名称</th><th>方向</th><th>交易总笔数</th><th>最终收益</th></tr></thead><tbody><tr><td>${esc(holding.symbol)}</td><td>${esc(holding.name)}</td><td>${esc(holding.direction)}</td><td>${holding.trade_count}</td><td class="${holding.realized_pnl>=0?'positive':'negative'}">${money(holding.realized_pnl)}</td></tr></tbody></table></div></div></section><section class="panel"><div class="panel-head"><h2>成交记录</h2><div class="pager">共 ${filtered.length} 条 ${pageButtons}</div></div><div class="panel-body"><div class="table-toolbar"><input class="table-search" id="bt-search" placeholder="搜索日期 / 原因" value="${esc(btQuery)}"><div class="pager">第 ${page} / ${pages} 页</div></div><div class="table-wrap"><table><thead><tr><th>入场</th><th>出场</th><th>方向</th><th>入场价</th><th>出场价</th><th>数量</th><th>收益</th><th>持有</th><th>原因</th></tr></thead><tbody>${rowsHtml}</tbody></table></div></div></section>${backtestExecutionPanel(current)}`;
 }
 async function backtestPage(){
   if(backtestResult){
@@ -584,8 +591,7 @@ async function backtestPage(){
     if(search)search.onchange=()=>{btQuery=search.value.trim();btPage=1;backtestPage()};
     return;
   }
-  const datasets=catalog.datasets||[];
-  const experiments=(catalog.experiments||[]).filter(e=>supportsPredictionBacktest(e.snapshot));
+  const experiments=(catalog.experiments||[]).filter(e=>(e.has_completed_run||e.status==='completed')&&supportsPredictionBacktest(e.snapshot));
   if(page==='backtest-history'){
     const recent=catalog.backtests||[];
     const rows=recent.map(b=>`<tr><td><button class="table-link" data-backtest="${esc(b.id)}">${esc(b.name)}</button><small>${esc(b.source?.kind||'')}</small></td><td>${pct(b.metrics?.net_return)}</td><td>${pct(b.metrics?.max_drawdown)}</td><td>${b.metrics?.trade_count??'—'}</td><td>${date(b.created_at)}</td></tr>`).join('');
@@ -593,65 +599,85 @@ async function backtestPage(){
       `<section class="panel">${recent.length?`<div class="table-wrap"><table><thead><tr><th>名称</th><th>净收益</th><th>最大回撤</th><th>成交</th><th>创建</th></tr></thead><tbody>${rows}</tbody></table></div>`:'<div class="empty">还没有回测记录</div>'}</section>`;
     return;
   }
-  const current=backtestResult;
-  const r=current?.result;
-  const cfg=r?.config||{};
-  const src=backtestSeed?'experiment':current?.source?.kind||backtestEntrySource||'sma';
-  backtestEntrySource=null;
-  const selectedDataset=current?.dataset?.id||datasetId||datasets[0]?.id||'';
-  const selectedExperiment=backtestSeed||current?.source?.experiment_id||experiments[0]?.id||'';
+  const selectedExperiment=backtestSeed||experiments[0]?.id;
+  const preferredRun=backtestRunSeed;
+  backtestSeed=null;
+  backtestRunSeed=null;
+  if(!experiments.length){
+    $('#app').innerHTML=head('运行回测','')+prerequisite('需要已完成的逐 K 线收益预测实验。','experiment-center','查看实验');
+    return;
+  }
   $('#app').innerHTML=head('运行回测','订单级执行：收盘信号、下一根开盘成交，含手续费、滑点、止损止盈。','<button class="btn" data-page="backtest-center">返回回测中心</button>')
-    +`<section class="panel"><div class="panel-head"><h2>回测配置</h2><span class="badge gray">单标的 · 只做多/空仓</span></div><div class="panel-body"><form id="backtest-form">`
-    +`<div class="form-grid">${field('回测名称','name',current?.name||((datasets.find(d=>d.id===selectedDataset)?.name||'单标的')+' · SMA 回测'),'text','required maxlength="100"')}${selectField('信号来源','source',`<option value="sma" ${src==='sma'?'selected':''}>SMA 规则</option><option value="experiment" ${src==='experiment'?'selected':''}>实验预测</option>`)}</div>`
-    +`<div id="sma-fields" class="form-grid">${selectField('数据快照','dataset_id',datasets.map(d=>`<option value="${d.id}" ${d.id===selectedDataset?'selected':''}>${esc(d.name)}</option>`).join('')||'<option value="">暂无数据</option>')}${field('快线','fast',current?.source?.fast??20,'number','min="1" max="250" required')}${field('慢线','slow',current?.source?.slow??60,'number','min="2" max="500" required')}</div>`
-    +(!datasets.length?'<div id="sma-snapshot-link"><button type="button" class="table-link" data-page="data">去行情数据保存快照 →</button></div>':'')
-    +`<div id="experiment-fields" class="form-grid" style="display:none">${selectField('实验','experiment_id',experiments.map(e=>`<option value="${e.id}" ${e.id===selectedExperiment?'selected':''}>${esc(e.name)}</option>`).join('')||'<option value="">暂无已完成实验</option>')}${selectField('运行记录','run_id','<option value="">正在读取运行记录…</option>')}${field('开仓阈值（可选）','threshold',current?.source?.threshold??'','number','step="any" min="-1" max="1"')}<small>选择已完成的运行后，可调整阈值、成本和风控，无需重新训练。</small></div>`
-    +`<div class="form-grid">${field('初始资金（行情计价单位）','initial_cash',cfg.initial_cash??100000,'number','min="1" step="any" required')}${field('手续费（bps）','fee_bps',cfg.fee_bps??5,'number','min="0" max="1000" step="any" required')}${field('滑点（bps）','slippage_bps',cfg.slippage_bps??2,'number','min="0" max="1000" step="any" required')}${field('仓位比例','position_pct',cfg.position_pct??1,'number','min="0.01" max="1" step="any" required')}</div>`
-    +`<div class="form-grid">${field('止损（比例，0 关闭）','stop_loss_pct',cfg.stop_loss_pct??0,'number','min="0" max="0.9" step="any" required')}${field('止盈（比例，0 关闭）','take_profit_pct',cfg.take_profit_pct??0,'number','min="0" max="10" step="any" required')}${field('最大持有根数（0 关闭）','max_hold_bars',cfg.max_hold_bars??0,'number','min="0" max="1000" step="1" required')}</div>`
+    +`<section class="panel"><div class="panel-head"><h2>回测配置</h2><span class="badge gray">样本外预测</span></div><div class="panel-body"><form id="backtest-form">`
+    +`<div class="form-grid">${selectField('实验','experiment_id',experiments.map(e=>`<option value="${esc(e.id)}" ${e.id===selectedExperiment?'selected':''}>${esc(e.name)}</option>`).join(''))}${selectField('运行记录','run_id','')}</div>
+      <p id="prediction-context" class="detail-note"></p><fieldset id="execution-settings" disabled>
+      <legend>交易策略</legend><div class="form-grid">${selectField('预测如何转换为持仓','strategy','')}${field('做多阈值','threshold','','number','step="any" required')}${field('做空阈值','short_threshold','','number','step="any" required')}</div>
+      <p class="detail-note" id="signal-rule" aria-live="polite"></p>
+      <h3>执行参数</h3>${field('回测名称','name','','text','required maxlength="100"')}
+      <div class="form-grid">${field('初始资金','initial_cash','','number','min="0.00000001" step="any" required')}${field('手续费（bps）','fee_bps','','number','min="0" max="1000" step="any" required')}${field('滑点（bps）','slippage_bps','','number','min="0" max="1000" step="any" required')}${field('仓位比例','position_pct','','number','min="0.00000001" max="1" step="any" required')}</div>
+      <div class="form-grid">${field('止损（比例，0 关闭）','stop_loss_pct','','number','min="0" max="0.9" step="any" required')}${field('止盈（比例，0 关闭）','take_profit_pct','','number','min="0" max="10" step="any" required')}${field('最大持有根数（0 关闭）','max_hold_bars','','number','min="0" max="1000" step="1" required')}</div></fieldset>`
     +`<div class="actions"><button class="btn primary" type="submit">运行回测</button><span class="selection-hint">信号在收盘产生，下一根开盘成交；止损/止盈用当根 high/low 触发。</span></div><div class="error" id="backtest-error"></div></form></div></section>`;
-  const sourceSel=$('#source');
-  const syncSource=()=>{
-    const isSma=sourceSel.value==='sma';
-    for(const [id,on] of [['sma-fields',isSma],['experiment-fields',!isSma]]){
-      const group=$('#'+id);group.hidden=!on;group.style.display=on?'':'none';
-      group.querySelectorAll('input,select').forEach(el=>el.disabled=!on);
-    }
-    const snapshotLink=$('#sma-snapshot-link');
-    if(snapshotLink)snapshotLink.hidden=!isSma;
-    const ready=isSma?datasets.length:experiments.length;
-    $('#backtest-form button[type=submit]').disabled=!ready;
-    $('#backtest-error').textContent=ready?'':isSma?'SMA 回测需要行情快照。':'请先完成一次模型实验，再使用预测信号回测。';
-  };
-  const syncCosts=()=>{
-    if(sourceSel.value!=='experiment')return;
-    const selected=experiments.find(e=>e.id===$('#experiment_id').value);
-    if(!selected)return;
-    $('#fee_bps').value=selected.snapshot?.config?.cost_bps??5;
-    $('#slippage_bps').value=0;
-    $('#threshold').value='';
-  };
-  syncSource();
-  syncCosts();
-  let runRequest=0, runsReady=false;
-  const loadRuns=async(preferred=null)=>{
-    const token=++runRequest, input=$('#run_id'), experiment=$('#experiment_id').value;
-    runsReady=false;$('#backtest-form button[type=submit]').disabled=sourceSel.value==='experiment';
-    input.innerHTML='<option value="">正在读取运行记录…</option>';
+  const form=$('#backtest-form'), run=form.elements.run_id, experiment=form.elements.experiment_id;
+  const submit=form.querySelector('button[type=submit]'), settings=$('#execution-settings'), error=$('#backtest-error');
+  let revision=0;
+  function pending(){
+    settings.disabled=true;
+    submit.disabled=true;
+    error.textContent='';
+    return ++revision;
+  }
+  async function chooseRun(){
+    const request=pending();
     try{
-      const records=experiment?await api('/experiments/'+experiment+'/runs'):[];
-      if(token!==runRequest||input!==$('#run_id'))return;
+      const values=await api('/experiments/'+experiment.value+'/runs/'+run.value+'/backtest-settings');
+      if(!form.isConnected||request!==revision)return;
+      for(const [key,value] of Object.entries(values))form.elements[key].value=value;
+      const selected=experiments.find(e=>e.id===experiment.value);
+      form.elements.name.value=(selected.name+' · 回测').slice(0,100);
+      const task=selected.snapshot.target?.task||'binary';
+      const multi=task==='multiclass', regression=task==='regression';
+      const strategy=form.elements.strategy, upper=form.elements.threshold, lower=form.elements.short_threshold;
+      strategy.innerHTML=multi?'<option value="return_band">涨跌分档概率 · 多空</option>':
+        `<option value="long_short">${regression?'预测收益率':'正类概率'} · 多空</option><option value="long_flat">仅做多 / 空仓</option>`;
+      upper.min=lower.min=regression?-1:0;
+      upper.max=lower.max=1;
+      lower.value=multi?upper.value:regression?Math.min(0,-Number(upper.value)):Math.min(Number(upper.value),Number((1-upper.value).toFixed(6)));
+      const describe=()=>{
+        const both=strategy.value!=='long_flat';
+        lower.disabled=!both;
+        lower.closest('.field').hidden=!both;
+        lower.setCustomValidity(both&&!multi&&Number(lower.value)>Number(upper.value)?'做空阈值不能高于做多阈值。':'');
+        const target=selected.snapshot.target;
+        const metric=regression?'预测收益率（小数）':`未来收益超过 ${pct(target?.threshold??target?.params?.threshold??0)} 的预测概率`;
+        $('#signal-rule').textContent=multi?
+          `上涨概率唯一最高且 > ${upper.value} 做多；下跌概率唯一最高且 > ${lower.value} 做空；其余空仓。`:
+          `${metric} > ${upper.value} 做多；${both?`低于 ${lower.value} 做空；`:''}其余空仓。`;
+      };
+      strategy.onchange=upper.oninput=lower.oninput=describe;
+      describe();
+      settings.disabled=false;
+      submit.disabled=false;
+    }catch(e){if(form.isConnected&&request===revision)error.textContent=e.message}
+  }
+  async function chooseExperiment(preferred){
+    const request=pending(), selected=experiments.find(e=>e.id===experiment.value);
+    $('#prediction-context').textContent=[selected.snapshot.dataset.name,selected.snapshot.target?.name,selected.snapshot.config.model,'测试集预测'].filter(Boolean).join(' · ');
+    run.disabled=true;
+    run.innerHTML='<option value="">正在读取运行记录…</option>';
+    try{
+      const records=await api('/experiments/'+experiment.value+'/runs');
+      if(!form.isConnected||request!==revision)return;
       const completed=records.filter(r=>r.status==='completed');
-      input.innerHTML=completed.map(r=>`<option value="${esc(r.id)}">${esc(r.created_at||'历史运行')} · ${esc(r.id.slice(0,8))}</option>`).join('')||'<option value="">没有已完成的运行</option>';
-      if(completed.some(r=>r.id===preferred))input.value=preferred;
-      runsReady=completed.length>0;
-      if(sourceSel.value==='experiment'){$('#backtest-form button[type=submit]').disabled=!runsReady;$('#backtest-error').textContent=runsReady?'':'该实验没有已完成的运行。'}
-    }catch(error){if(input===$('#run_id')){$('#backtest-error').textContent=error.message;input.innerHTML='<option value="">读取失败，请重新选择实验</option>'}}
-  };
-  $('#experiment_id').onchange=()=>{syncCosts();void loadRuns()};
-  sourceSel.onchange=()=>{syncSource();syncCosts();if(sourceSel.value==='experiment')void loadRuns()};
-  const formNode=$('#backtest-form');
-  await loadRuns(backtestRunSeed||current?.source?.run_id);if(formNode!==$('#backtest-form'))return;backtestRunSeed=null;
-  if(backtestSeed){syncCosts();$('#name').value=(experiments.find(e=>e.id===backtestSeed)?.name||'实验')+' · 回测';backtestSeed=null}
+      run.innerHTML=completed.map(r=>`<option value="${esc(r.id)}">${esc(r.created_at||'历史运行')} · ${esc(r.id.slice(0,8))}</option>`).join('');
+      if(!completed.length){error.textContent='该实验没有已完成的运行。';return}
+      if(completed.some(r=>r.id===preferred))run.value=preferred;
+      run.disabled=false;
+      await chooseRun();
+    }catch(e){if(form.isConnected&&request===revision)error.textContent=e.message}
+  }
+  experiment.onchange=()=>chooseExperiment(null);
+  run.onchange=chooseRun;
+  await chooseExperiment(preferredRun);
 }
 async function dataPage(){
   const version=renderVersion;
@@ -792,7 +818,7 @@ function snapshotDialog(symbol,period,coverage){
   const end=Math.min(Date.parse(coverage.end)+step,Math.floor(Date.now()/60_000)*60_000);
   const datetime=stamp=>new Date(stamp).toISOString().slice(0,16);
   const limits=`required min="${datetime(first)}" max="${datetime(end)}"`;
-  modal('保存行情快照',`<p class="sub">${esc(symbol)} · ${esc(period)}。快照可用于 SMA 回测和研究资产预览。</p>
+  modal('保存行情快照',`<p class="sub">${esc(symbol)} · ${esc(period)}。快照可用于实验训练和研究资产预览。</p>
     <input type="hidden" name="symbol" value="${esc(symbol)}"><input type="hidden" name="period" value="${esc(period)}">
     <div class="form-grid">${field('起点（UTC）','start',datetime(Math.max(first,end-1000*step)),'datetime-local',limits)}
     ${field('终点（UTC，不含）','end',datetime(end),'datetime-local',limits)}</div>
@@ -801,7 +827,7 @@ function snapshotDialog(symbol,period,coverage){
 
 function supportsPredictionBacktest(snapshot){
   const config=snapshot.config;
-  return (config.trigger?.kind||((config.sample_mode??'bar')==='bar'?'bar':'event'))==='bar'&&snapshot.target?.task!=='multiclass';
+  return (config.trigger?.kind||((config.sample_mode??'bar')==='bar'?'bar':'event'))==='bar'&&['regression','binary','multiclass'].includes(snapshot.target?.task||'binary');
 }
 function predictionTable(result){
   const classes=result.output.classes||[], isMulti=result.output.task==='multiclass';
@@ -814,7 +840,29 @@ function predictionTable(result){
     <div class="table-wrap"><table><thead><tr><th>观察时间（UTC）</th>${headers.map(label=>`<th>${esc(label)}</th>`).join('')}</tr></thead>
     <tbody>${rows.map(row=>`<tr><td>${esc(row.observed_at)}</td>${values(row).map(value=>`<td>${esc(value??'—')}</td>`).join('')}</tr>`).join('')}</tbody></table></div></section>`;
 }
-async function renderDetail(){const id=detail,version=renderVersion;let e=await api('/experiments/'+id);const executions=await api('/experiments/'+id+'/runs');const chosen=selectedRun||e.latest_run_id;const run=chosen?await api('/runs/'+chosen):null;if(run)e={...e,...run,id:e.id,result:run.result};const r=e.result;if(id!==detail||version!==renderVersion)return;activeDiagnostics=r?.diagnostics||null;if(diagnosticsExperiment!==id){diagnosticsSplit='valid';diagnosticsExperiment=id}$('#app').innerHTML=head(esc(e.name),`实验 ${e.id} · ${esc(e.snapshot.dataset.name)}${e.snapshot.factor_set?' · 特征集 '+esc(e.snapshot.factor_set.name):''}${e.snapshot.config.trigger?.rule?' · 事件 '+esc(e.snapshot.config.trigger.rule.name):''}`,button('← 返回实验','back')+`<button class="btn" data-rerun="${e.id}">原配置重新运行</button>`+(e.status==='completed'&&r&&supportsPredictionBacktest(e.snapshot)?`<button class="btn primary" data-replay="${e.id}" data-run="${esc(chosen||'')}">用此预测回测</button>`:'')+`<button class="btn" data-copy="${e.id}">复制配置</button>${['running','queued'].includes(e.status)?'':`<button class="btn" data-delete-experiment="${esc(e.id)}">删除实验</button>`}<a class="btn" href="${chosen?'/api/runs/'+chosen:'/api/experiments/'+e.id+'/export'}" download="${esc(chosen||e.id)}.json">导出 JSON</a>`)+`<div class="banner">${badge(e.status)} ${esc(e.message)} <span style="margin-left:auto">${esc(e.snapshot.config.model)} · ${esc(e.snapshot.target.name)}</span></div>`;$('#app').insertAdjacentHTML('beforeend',`<section class="panel"><div class="panel-body"><label for="detail-run">历史运行</label><select id="detail-run"><option value="">跟随最新运行</option>${executions.map(x=>`<option value="${esc(x.id)}" ${selectedRun===x.id?'selected':''}>${esc(x.created_at||'历史运行')} · ${esc(x.id.slice(0,8))} · ${esc(x.status)}</option>`).join('')}</select><p class="detail-note">每次运行保留独立结果。重新运行沿用当前实验的冻结配置。</p></div></section>`);const marketAudit=marketAuditText(e.snapshot.dataset.market_audit);if(marketAudit)$('#app').insertAdjacentHTML('beforeend',`<p class="detail-note">${esc(marketAudit)}</p>`);if(!r)return;if(r.kind==='event'||r.output?.task==='multiclass'){$('#app').innerHTML+=`<div id="model-diagnostics">${renderDiagnostics(r.diagnostics,diagnosticsSplit)}</div>${predictionTable(r)}`;return}if(r.kind==='prediction_only'){$('#app').innerHTML+=`<div id="model-diagnostics">${renderDiagnostics(r.diagnostics,diagnosticsSplit)}</div><p class="detail-note">预测已保存。可点击“用此预测回测”配置交易策略。</p>`;return}if(r.kind==='chan_event'){$('#app').innerHTML+=`<div id="model-diagnostics">${renderDiagnostics(r.diagnostics,diagnosticsSplit)}</div>${eventPanel(r.event_report,true,r.output)}<div class="detail-note">${esc(r.policy)}</div>`;return}$('#app').innerHTML+=`<div id="model-diagnostics">${renderDiagnostics(r.diagnostics,diagnosticsSplit)}</div><div class="section-heading"><div><h2>交易表现</h2><p>以下指标评价预测转交易后的结果，与上方模型诊断分开观察。</p></div></div><div class="stats">${stat('样本外净收益',pct(r.metrics.net_return),'含每侧 '+e.snapshot.config.cost_bps+' bps 成本',r.metrics.net_return>=0?'positive':'negative')}${stat('最大回撤',pct(r.metrics.max_drawdown),'从初始净值 1 开始统计')}${stat('成交次数',r.metrics.trade_count,'含期末平仓')}${stat(r.output.task==='regression'?'预测 MAE':'分类 AUC',fmt(r.output.task==='regression'?r.metrics.mae:r.metrics.auc,4),r.output.task==='regression'?'收益率比例单位':'仅测试集 · 单一类别时不定义')}</div><section class="panel"><div class="panel-head"><h2>样本外轨迹</h2>${legend([{name:'策略净值'},{name:'买入持有',color:'#bdc6d5'}])}</div><div class="panel-body"><div id="detail-chart">${chart([{name:'策略净值',values:[1,...r.rows.map(x=>x.equity)]},{name:'买入持有',values:[1,...r.rows.map(x=>x.benchmark)],color:'#bdc6d5',dashed:true}],{hit:true})}</div><div class="chart-caption"><span>${date(r.rows[0]?.entry_time)}</span><span>移动鼠标查看对应决策与特征</span><span>${date(r.rows.at(-1)?.time)}</span></div><div id="inspector" class="inspect"></div></div></section><div class="grid-two"><section class="panel"><div class="panel-head"><h2>预测值与实际标签</h2><span class="badge gray">${esc(r.output.meaning)}</span></div><div class="panel-body">${legend([{name:'预测值'},{name:'实际标签',color:'#c4cedd'}])}${chart([{name:'预测值',values:r.rows.map(x=>x.prediction)},{name:'实际标签',values:r.rows.map(x=>x.label),color:'#c4cedd'}],{height:200})}</div></section><section class="panel"><div class="panel-head"><h2>时间切分与标签隔离</h2></div><div class="panel-body">${Object.entries(r.splits).map(([k,v])=>`<div class="info-row"><span>${{train:'训练',valid:'验证',test:'测试'}[k]} · ${v.count} 样本</span>${date(v.start)} → ${date(v.end)}</div>`).join('')}<p class="sub" style="margin-top:14px">原始时间轴 60 / 20 / 20 切分；剔除标签跨界样本。标准化只拟合训练输入。</p></div></section></div><section class="panel"><div class="panel-head"><h2>执行约定</h2></div><div class="panel-body"><div class="detail-note">${esc(r.policy)}</div></div></section><section class="panel"><div class="panel-head"><h2>成交记录</h2><span class="selection-hint">显示最近 50 条 · 完整记录可导出</span></div><div class="table-wrap"><table><thead><tr><th>信号日期</th><th>成交日期</th><th>动作</th><th>成交价</th><th>仓位变化</th><th>成本比例</th></tr></thead><tbody>${r.trades.slice(-50).reverse().map(t=>`<tr><td>${date(t.signal_time)||'期末'}</td><td>${date(t.time)}</td><td>${esc(t.action)}</td><td>${fmt(t.price,2)}</td><td>${pct(t.weight_change)}</td><td>${pct(t.cost_rate)}</td></tr>`).join('')}</tbody></table></div></section>${!r.diagnostics&&r.history.length?`<section class="panel"><div class="panel-head"><h2>训练过程</h2></div><div class="panel-body">${legend([{name:'训练损失'},{name:'验证损失'}])}${chart([{name:'训练损失',values:r.history.map(x=>x.train)},{name:'验证损失',values:r.history.map(x=>x.valid)}])}<p class="sub">回归损失在训练目标标准化后的尺度计算。</p></div></section>`:''}`;const inspect=i=>{const row=r.rows[Math.max(0,Math.min(i,r.rows.length-1))];$('#inspector').innerHTML=`<strong>信号 ${date(row.signal_time)}</strong> → ${date(row.entry_time)} 开盘调仓 → ${date(row.time)} 计价 <div class="inspect-grid"><div>预测<span>${row.valid_prediction?fmt(row.prediction,5):'缺失 · 空仓'}</span></div><div>实际标签<span>${fmt(row.label,5)}</span></div><div>仓位<span>${pct(row.weight)}</span></div><div>区间净收益<span>${pct(row.net_return)}</span></div>${e.snapshot.factors.map(f=>`<div>${esc(f.name)}<span>${fmt(row.features[f.id],5)}</span></div>`).join('')}</div>`};inspect(0);$('#detail-chart svg').onmousemove=ev=>{const svg=ev.currentTarget,rect=svg.getBoundingClientRect(),x=(ev.clientX-rect.left)/rect.width*1000,idx=Math.round((x-58)/922*r.rows.length)-1;inspect(idx);const line=svg.querySelector('.cursor-line');line.setAttribute('x1',Math.max(58,Math.min(980,x)));line.setAttribute('x2',Math.max(58,Math.min(980,x)));line.setAttribute('opacity',1)}}
+async function renderDetail(){
+  const id=detail, version=renderVersion, requestedRun=detailState.selectedRun;
+  const current=()=>id===detail && version===renderVersion && requestedRun===detailState.selectedRun;
+  const [experiment, executions]=await Promise.all([
+    api('/experiments/'+id+(requestedRun?'?include_result=false':'')),
+    api('/experiments/'+id+'/runs'),
+  ]);
+  if(!current())return;
+  const chosen=requestedRun||experiment.latest_run_id;
+  let e=experiment;
+  if(requestedRun){
+    const run=await api('/runs/'+requestedRun);
+    if(!current())return;
+    e={...experiment,...run,id,result:run.result};
+  }
+  const r=e.result;
+  detailState.diagnostics=r?.diagnostics||null;
+  const diagnosticsOwner=chosen||id;
+  if(detailState.diagnosticsOwner!==diagnosticsOwner){
+    detailState.split='valid';
+    detailState.diagnosticsOwner=diagnosticsOwner;
+  }
+  $('#app').innerHTML=head(esc(e.name),`实验 ${e.id} · ${esc(e.snapshot.dataset.name)}${e.snapshot.factor_set?' · 特征集 '+esc(e.snapshot.factor_set.name):''}${e.snapshot.config.trigger?.rule?' · 事件 '+esc(e.snapshot.config.trigger.rule.name):''}`,button('← 返回实验','back')+`<button class="btn" data-rerun="${e.id}">原配置重新运行</button>`+(e.status==='completed'&&r&&supportsPredictionBacktest(e.snapshot)?`<button class="btn primary" data-replay="${e.id}" data-run="${esc(chosen||'')}">用此预测回测</button>`:'')+`<button class="btn" data-copy="${e.id}">复制配置</button>${['running','queued'].includes(e.status)?'':`<button class="btn" data-delete-experiment="${esc(e.id)}">删除实验</button>`}<a class="btn" href="${chosen?'/api/runs/'+chosen:'/api/experiments/'+e.id+'/export'}" download="${esc(chosen||e.id)}.json">导出 JSON</a>`)+`<div class="banner">${badge(e.status)} ${esc(e.message)} <span style="margin-left:auto">${esc(e.snapshot.config.model)} · ${esc(e.snapshot.target.name)}</span></div>`;$('#app').insertAdjacentHTML('beforeend',`<section class="panel"><div class="panel-body"><label for="detail-run">历史运行</label><select id="detail-run"><option value="">跟随最新运行</option>${executions.map(x=>`<option value="${esc(x.id)}" ${detailState.selectedRun===x.id?'selected':''}>${esc(x.created_at||'历史运行')} · ${esc(x.id.slice(0,8))} · ${esc(x.status)}</option>`).join('')}</select><p class="detail-note">每次运行保留独立结果。重新运行沿用当前实验的冻结配置。</p></div></section>`);const marketAudit=marketAuditText(e.snapshot.dataset.market_audit);if(marketAudit)$('#app').insertAdjacentHTML('beforeend',`<p class="detail-note">${esc(marketAudit)}</p>`);if(!r)return;if(r.kind==='event'||r.output?.task==='multiclass'){$('#app').innerHTML+=`<div id="model-diagnostics">${renderDiagnostics(r.diagnostics,detailState.split)}</div>${predictionTable(r)}`;return}if(r.kind==='prediction_only'){$('#app').innerHTML+=`<div id="model-diagnostics">${renderDiagnostics(r.diagnostics,detailState.split)}</div><p class="detail-note">预测已保存。可点击“用此预测回测”配置交易策略。</p>`;return}if(r.kind==='chan_event'){$('#app').innerHTML+=`<div id="model-diagnostics">${renderDiagnostics(r.diagnostics,detailState.split)}</div>${eventPanel(r.event_report,true,r.output)}<div class="detail-note">${esc(r.policy)}</div>`;return}$('#app').innerHTML+=`<div id="model-diagnostics">${renderDiagnostics(r.diagnostics,detailState.split)}</div><div class="section-heading"><div><h2>交易表现</h2><p>以下指标评价预测转交易后的结果，与上方模型诊断分开观察。</p></div></div><div class="stats">${stat('样本外净收益',pct(r.metrics.net_return),'含每侧 '+e.snapshot.config.cost_bps+' bps 成本',r.metrics.net_return>=0?'positive':'negative')}${stat('最大回撤',pct(r.metrics.max_drawdown),'从初始净值 1 开始统计')}${stat('成交次数',r.metrics.trade_count,'含期末平仓')}${stat(r.output.task==='regression'?'预测 MAE':'分类 AUC',fmt(r.output.task==='regression'?r.metrics.mae:r.metrics.auc,4),r.output.task==='regression'?'收益率比例单位':'仅测试集 · 单一类别时不定义')}</div><section class="panel"><div class="panel-head"><h2>样本外轨迹</h2>${legend([{name:'策略净值'},{name:'买入持有',color:'#bdc6d5'}])}</div><div class="panel-body"><div id="detail-chart">${chart([{name:'策略净值',values:[1,...r.rows.map(x=>x.equity)]},{name:'买入持有',values:[1,...r.rows.map(x=>x.benchmark)],color:'#bdc6d5',dashed:true}],{hit:true})}</div><div class="chart-caption"><span>${date(r.rows[0]?.entry_time)}</span><span>移动鼠标查看对应决策与特征</span><span>${date(r.rows.at(-1)?.time)}</span></div><div id="inspector" class="inspect"></div></div></section><div class="grid-two"><section class="panel"><div class="panel-head"><h2>预测值与实际标签</h2><span class="badge gray">${esc(r.output.meaning)}</span></div><div class="panel-body">${legend([{name:'预测值'},{name:'实际标签',color:'#c4cedd'}])}${chart([{name:'预测值',values:r.rows.map(x=>x.prediction)},{name:'实际标签',values:r.rows.map(x=>x.label),color:'#c4cedd'}],{height:200})}</div></section><section class="panel"><div class="panel-head"><h2>时间切分与标签隔离</h2></div><div class="panel-body">${Object.entries(r.splits).map(([k,v])=>`<div class="info-row"><span>${{train:'训练',valid:'验证',test:'测试'}[k]} · ${v.count} 样本</span>${date(v.start)} → ${date(v.end)}</div>`).join('')}<p class="sub" style="margin-top:14px">原始时间轴 60 / 20 / 20 切分；剔除标签跨界样本。标准化只拟合训练输入。</p></div></section></div><section class="panel"><div class="panel-head"><h2>执行约定</h2></div><div class="panel-body"><div class="detail-note">${esc(r.policy)}</div></div></section><section class="panel"><div class="panel-head"><h2>成交记录</h2><span class="selection-hint">显示最近 50 条 · 完整记录可导出</span></div><div class="table-wrap"><table><thead><tr><th>信号日期</th><th>成交日期</th><th>动作</th><th>成交价</th><th>仓位变化</th><th>成本比例</th></tr></thead><tbody>${r.trades.slice(-50).reverse().map(t=>`<tr><td>${date(t.signal_time)||'期末'}</td><td>${date(t.time)}</td><td>${esc(t.action)}</td><td>${fmt(t.price,2)}</td><td>${pct(t.weight_change)}</td><td>${pct(t.cost_rate)}</td></tr>`).join('')}</tbody></table></div></section>${!r.diagnostics&&r.history.length?`<section class="panel"><div class="panel-head"><h2>训练过程</h2></div><div class="panel-body">${legend([{name:'训练损失'},{name:'验证损失'}])}${chart([{name:'训练损失',values:r.history.map(x=>x.train)},{name:'验证损失',values:r.history.map(x=>x.valid)}])}<p class="sub">回归损失在训练目标标准化后的尺度计算。</p></div></section>`:''}`;const inspect=i=>{const row=r.rows[Math.max(0,Math.min(i,r.rows.length-1))];$('#inspector').innerHTML=`<strong>信号 ${date(row.signal_time)}</strong> → ${date(row.entry_time)} 开盘调仓 → ${date(row.time)} 计价 <div class="inspect-grid"><div>预测<span>${row.valid_prediction?fmt(row.prediction,5):'缺失 · 空仓'}</span></div><div>实际标签<span>${fmt(row.label,5)}</span></div><div>仓位<span>${pct(row.weight)}</span></div><div>区间净收益<span>${pct(row.net_return)}</span></div>${e.snapshot.factors.map(f=>`<div>${esc(f.name)}<span>${fmt(row.features[f.id],5)}</span></div>`).join('')}</div>`};inspect(0);$('#detail-chart svg').onmousemove=ev=>{const svg=ev.currentTarget,rect=svg.getBoundingClientRect(),x=(ev.clientX-rect.left)/rect.width*1000,idx=Math.round((x-58)/922*r.rows.length)-1;inspect(idx);const line=svg.querySelector('.cursor-line');line.setAttribute('x1',Math.max(58,Math.min(980,x)));line.setAttribute('x2',Math.max(58,Math.min(980,x)));line.setAttribute('opacity',1)}}
 function factorSetsTable(){const sets=catalog.factor_sets||[];if(!sets.length)return '<div class="empty">还没有特征集<b>把常用特征组合保存下来，实验时直接引用。</b></div>';return `<div class="table-wrap"><table><thead><tr><th>名称</th><th>特征数</th><th>清单哈希</th><th>创建时间</th></tr></thead><tbody>${sets.map(s=>`<tr><td>${esc(s.name)}<small>${esc(s.description||'')}</small></td><td>${s.factor_ids.length}</td><td class="mono">${esc((s.manifest_hash||'').slice(0,16))}…</td><td>${date(s.created_at)}</td></tr>`).join('')}</tbody></table></div>`}
 async function factorCorrelation(){
   const target=$('#factor-eval-panel'),token=evaluationGate.next(),sourceDataset=datasetId,sourceCategory=category;
@@ -865,7 +913,7 @@ async function newExperiment(copy=null){
 async function compare(){if(selected.size<2){toast('请选择至少两个已完成实验');return}const target=$('#comparison'),token=comparisonGate.next();target.innerHTML=loading('正在加载对比结果…');const exps=await Promise.all([...selected].map(id=>api('/experiments/'+id)));if(!comparisonGate.current(token)||target!==$('#comparison'))return;if(exps.some(e=>['chan_event','event','prediction_only'].includes(e.result?.kind)||!e.result)){target.innerHTML='<p class="detail-note">请在各实验详情按目标比较预测误差、分类指标和样本外事件区间。</p>';return}const differences=comparisonDifferences(exps),differs=differences.length>0;const series=exps.map(e=>({name:e.name,values:[1,...e.result.rows.map(r=>r.equity)]}));$('#comparison').innerHTML=`<section class="panel"><div class="panel-head"><h2>实验对比</h2><span class="badge ${differs?'orange':'green'}">${differs?'比较条件存在差异':'数据、目标、区间与执行门槛一致'}</span></div><div class="panel-body">${legend(series)}${chart(series)}<div class="detail-note">按样本外进度对齐。${differs?'差异项：'+esc(differences.join('、'))+'。请结合这些差异解释曲线。':'比较条件一致，可观察特征与模型组合的效果。'}</div><div class="table-wrap"><table><thead><tr><th>实验</th><th>模型</th><th>特征集</th><th>目标</th><th>测试区间</th><th>成本</th><th>特征清单</th></tr></thead><tbody>${exps.map(e=>`<tr><td>${esc(e.name)}</td><td>${esc(e.snapshot.config.model)}</td><td>${esc(e.snapshot.factors.map(f=>f.name).join(' / '))}</td><td>${esc(e.snapshot.target.name)}</td><td>${date(e.result.splits.test.start)} → ${date(e.result.splits.test.end)}</td><td>${e.snapshot.config.cost_bps} bps</td><td class="mono">${esc((e.result.feature_manifest?.hash||'—').slice(0,8))}</td></tr>`).join('')}</tbody></table></div></div></section>`;$('#comparison').scrollIntoView({behavior:'smooth'})}
 async function navigate(next, experiment=null){
   backtestResult=null;
-  selectedRun=null;page=next;detail=experiment;
+  detailState=newDetailState();page=next;detail=experiment;
   window.scrollTo(0,0);
   await render();
 }
@@ -874,7 +922,6 @@ document.addEventListener('click',async ev=>{
   try{
     if(el.hasAttribute('data-close')){$('#dialog').close();return}
     if(el.dataset.page){
-      if(el.dataset.page==='backtest')backtestEntrySource=el.dataset.source||null;
       if(el.dataset.page==='training')taskTemplateId=el.dataset.taskId||null;
       await navigate(el.dataset.page);return
     }
@@ -884,7 +931,7 @@ document.addEventListener('click',async ev=>{
       $('#modal-form button[type=submit]').textContent='确认删除';
       return;
     }
-    if(el.dataset.rerun){el.disabled=true;try{const run=await post('/experiments/'+el.dataset.rerun+'/runs',{});selectedRun=run.id;toast('新运行已加入队列');await render()}finally{el.disabled=false}return}
+    if(el.dataset.rerun){el.disabled=true;try{const run=await post('/experiments/'+el.dataset.rerun+'/runs',{});toast('新运行已加入队列');if(detail===el.dataset.rerun){detailState.selectedRun=run.id;await render()}else if(!detail&&el.isConnected){await render()}}finally{el.disabled=false}return}
     if(el.dataset.replay){backtestRunSeed=el.dataset.run||null;backtestSeed=el.dataset.replay;backtestResult=null;await navigate('backtest');return}
     if(el.dataset.archive){await post('/factors/'+el.dataset.archive+'/archive',{});if(factorId===el.dataset.archive)factorId=null;toast('已归档，历史实验快照仍保留');await render();return}
     if(el.dataset.reclassify){
@@ -936,7 +983,7 @@ document.addEventListener('click',async ev=>{
     if(action==='edit-feature-note'){
       const feature=[...catalog.factors,...(catalog.chan_event?.features||[])].find(f=>f.id===factorId);
       if(!feature)return;
-      modal('人工备注',`<p class="sub">${esc(feature.name)}</p><input type="hidden" name="factor_id" value="${esc(feature.id)}">
+      modal('编辑特征备注',`<p class="sub">${esc(feature.name)}</p><input type="hidden" name="factor_id" value="${esc(feature.id)}">
         <div class="field"><label for="feature-note-input">备注（最多 2000 字）</label><textarea id="feature-note-input" class="feature-note-input" name="note" maxlength="2000" rows="6">${esc(feature.note||'')}</textarea><small>清空后保存即可删除备注。</small></div>`,'feature-note');
       return;
     }
@@ -965,8 +1012,8 @@ document.addEventListener('input',ev=>{
 });
 document.addEventListener('change',async ev=>{
   try{
-    if(ev.target.id==='detail-run'){selectedRun=ev.target.value||null;await render();return}
-    if(ev.target.id==='diagnostics-split'){diagnosticsSplit=ev.target.value;$('#model-diagnostics').innerHTML=renderDiagnostics(activeDiagnostics,diagnosticsSplit);return}
+    if(ev.target.id==='detail-run'){detailState.selectedRun=ev.target.value||null;await render();return}
+    if(ev.target.id==='diagnostics-split'){detailState.split=ev.target.value;$('#model-diagnostics').innerHTML=renderDiagnostics(detailState.diagnostics,detailState.split);return}
     if(ev.target.id==='experiment-status'){experimentStatus=ev.target.value;updateExperimentTable()}
     if(ev.target.id==='feature-category'){
       category=ev.target.value;
@@ -997,6 +1044,7 @@ document.addEventListener('submit',async ev=>{
   const form=ev.target;if(!['modal-form','training-form','upload-form','backtest-form'].includes(form.id))return;
   ev.preventDefault();if(form.dataset.busy)return;
   const submit=form.querySelector('[type=submit]'),label=submit.textContent;
+  if(form.id==='backtest-form'&&submit.disabled)return;
   form.dataset.busy='true';form.setAttribute('aria-busy','true');submit.disabled=true;
   submit.textContent=form.id==='backtest-form'?'正在执行回测…':'正在提交…';
   form.querySelectorAll('[data-close]').forEach(el=>el.disabled=true);
@@ -1009,10 +1057,9 @@ document.addEventListener('submit',async ev=>{
     }
     if(form.id==='backtest-form'){
       const obj=Object.fromEntries(fd);
-      for(const key of ['fast','slow','threshold','initial_cash','fee_bps','slippage_bps','position_pct','stop_loss_pct','take_profit_pct','max_hold_bars'])if(obj[key]!==undefined&&obj[key]!=='')obj[key]=Number(obj[key]);
+      for(const key of ['threshold','short_threshold','initial_cash','fee_bps','slippage_bps','position_pct','stop_loss_pct','take_profit_pct','max_hold_bars'])if(obj[key]!==undefined&&obj[key]!=='')obj[key]=Number(obj[key]);
       if(obj.threshold===''||obj.threshold===undefined)delete obj.threshold;
-      if(obj.source==='sma'){delete obj.experiment_id;delete obj.run_id;delete obj.threshold;if(obj.fast>=obj.slow)throw Error('慢线窗口必须大于快线窗口。')}
-      else{delete obj.dataset_id;delete obj.fast;delete obj.slow;if(!obj.run_id)throw Error('请选择已完成的运行')}
+      if(!obj.run_id||form.querySelector('#execution-settings').disabled)throw Error('请选择已完成的运行并等候配置加载');
       const result=await post('/backtests',obj);toast('回测完成');
       if(form.isConnected){backtestResult=result;btPage=1;btQuery='';await render()}
       return;
@@ -1055,7 +1102,7 @@ document.addEventListener('submit',async ev=>{
       else delete obj.event_types;
       if(obj.factor_set_id)delete obj.factor_ids;
       else{delete obj.factor_set_id;obj.factor_ids=fd.getAll('factor_ids');if(!obj.factor_ids.length)throw Error('请至少选择一个特征');if(obj.factor_ids.length>30)throw Error('最多选择 30 个特征')}
-      const e=await post('/experiments',obj);detail=e.id;page='experiments';experimentReturnPage='experiment-center';
+      const e=await post('/experiments',obj);detailState=newDetailState();detail=e.id;page='experiments';experimentReturnPage='experiment-center';
     }else if(kind==='category')await post('/categories',obj);
     if(form.id==='modal-form')$('#dialog').close();const notice=kind==='delete-experiment'?'实验已删除':kind==='experiment'?'实验已加入计算队列':kind==='factor-set'?'特征集已保存':kind==='factor-category'?'已归类到 '+(category||'未分类'):kind==='market-snapshot'?'行情快照已保存':'已保存';toast(notice);await render();
   }catch(e){if(error?.isConnected){error.textContent=e.message;error.setAttribute('role','alert');error.scrollIntoView({block:'nearest'})}else toast(e.message)}

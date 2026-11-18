@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 from . import storage, data, factors, models, backtest, evaluation, targets, triggers, sampling
 from . import planning, pipeline, policies, prediction_artifacts, runs
+from .execution_reports import trading_rows
 from .contracts import PreparedDataset
 from .targets import STRUCTURE_CONFIRMATION
 
@@ -17,30 +18,13 @@ def simulate(df, indices, predictions, task, config):
     predictions = np.asarray(predictions, dtype=float)
     if not len(indices) or len(indices) != len(predictions) or np.any(np.diff(indices) != 1):
         raise ValueError('回测需要连续且与预测一一对应的样本索引')
-    cutoff = config['entry_threshold'] if task == 'regression' else config['probability_threshold']
-    weights = policies.ThresholdPolicy(task, float(cutoff)).weights(predictions)
+    weights = policies.threshold_policy(task, config).weights(predictions)
     signals = pd.Series(0., index=df.index)
     signals.iloc[indices] = weights
     ledger = backtest.run(df, signals, backtest.BacktestConfig(
         initial_cash=1., fee_bps=config['cost_bps'], slippage_bps=0.),
         int(indices[0]), int(indices[-1]) + 1)
-    rows = []
-    previous = 1.
-    for i, pred, weight, value in zip(indices, predictions, weights, ledger['rows'][1:]):
-        nav = value['equity']
-        rows.append({'time': value['time'], 'signal_time': str(df.date.iloc[i]),
-                     'entry_time': str(df.date.iloc[i + 1]), 'prediction': float(pred) if np.isfinite(pred) else None,
-                     'weight': float(weight), 'net_return': nav / previous - 1,
-                     'equity': nav, 'benchmark': value['benchmark'], 'bar_index': int(i)})
-        previous = nav
-    trades = [{'time': o['time'], 'signal_time': o['signal_time'],
-               'action': '买入' if o['side'] == 'buy' else ('期末平仓' if o['type'] == 'close' else '卖出'),
-               'price': o['price'], 'weight_change': 1. if o['side'] == 'buy' else -1.,
-               'cost_rate': config['cost_bps'] / 10000} for o in ledger['orders']]
-    metrics = dict(ledger['metrics'])
-    metrics['round_trip_count'] = metrics['trade_count']
-    metrics['trade_count'] = metrics['order_count']  # Historical experiment UI counts fills.
-    return rows, trades, metrics
+    return trading_rows(df, indices, predictions, weights, ledger, config)
 
 
 def run(experiment_id):
@@ -140,7 +124,7 @@ def run(experiment_id):
         result['prediction_artifact'] = prediction_artifacts.publish(
             experiment_id, snap['dataset'], task, triggers.sample_mode(trigger), prediction_rows,
             output=output if config.get('trigger') or task == 'multiclass' else None)
-        can_trade = not event_mode and task != 'multiclass'
+        can_trade = policies.supports_backtest(triggers.sample_mode(trigger), task)
         result['backtest_available'] = can_trade
         test_rows = [row for row in prediction_rows if row['split'] == 'test']
         if event_mode:
@@ -181,7 +165,7 @@ def run(experiment_id):
                                    for key, value in zip(features.columns, array[i])}
             result.update(
                 rows=rows, trades=trades, metrics={**metrics, **trading},
-                strategy=policies.ThresholdPolicy(target['task'], float(config['entry_threshold'] if target['task'] == 'regression' else config['probability_threshold'])).definition(),
+                strategy=policies.threshold_policy(task, config).definition(),
                 engine_version=backtest.ENGINE_VERSION,
                 execution={'fee_bps': config['cost_bps'], 'slippage_bps': 0., 'position_pct': 1.},
                 policy='收盘决策，下一根开盘成交，逐根收盘计价，最后一个信号在下一根开盘执行后于该根收盘平仓。'

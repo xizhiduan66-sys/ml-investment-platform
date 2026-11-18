@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 from concurrent.futures import ThreadPoolExecutor
-from quant import jobs, storage
+from quant import jobs, runs, storage
 from quant.worker import exclusive_worker, execute
 
 
@@ -45,7 +45,7 @@ class DurableJobsTest(unittest.TestCase):
         self.enqueue('queued')
         with exclusive_worker():
             jobs.recover_exclusive()
-        self.assertEqual(storage.get('experiment', 'running')['status'], 'failed')
+        self.assertEqual(runs.latest('running')['status'], 'failed')
         self.assertEqual(storage.get('run', jobs.claim('new')['run_id'])['experiment_id'], 'queued')
 
     def test_exclusive_lock(self):

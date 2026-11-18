@@ -23,7 +23,7 @@ def register(factor_spec):
 
 
 def factor(id, name, family, description, params=(), scope="series", output="float",
-           missing="nan", requires=(), version=1, event_source=None):
+           missing="nan", requires=(), version=1, event_source=None, default_note="", validate_params=None):
     """注册装饰器：@factor(...) 后函数签名按要求实现。"""
     def decorator(fn):
         register(FactorSpec(
@@ -39,6 +39,8 @@ def factor(id, name, family, description, params=(), scope="series", output="flo
             requires=tuple(requires),
             compute=fn,
             event_source=event_source,
+            default_note=default_note,
+            validate_params=validate_params,
         ))
         return fn
     return decorator

@@ -69,6 +69,32 @@ class PredictionPolicyTest(unittest.TestCase):
             delete_experiment('abc')
             self.assertFalse((Path(directory) / ref['file']).exists())
 
+    def test_only_experiment_inputs_are_accepted(self):
+        from pydantic import ValidationError
+        from quant.research_inputs import BacktestIn
+        for fields in ({'source': 'sma'}, {'dataset_id': 'd'}, {'fast': 10}, {'slow': 30}):
+            with self.subTest(fields=fields), self.assertRaises(ValidationError):
+                BacktestIn(name='test', experiment_id='experiment', **fields)
+
+    def test_run_settings_match_execution(self):
+        from quant import backtest_submission
+        from quant.research_inputs import BacktestIn
+        with tempfile.TemporaryDirectory() as directory, patch.object(storage, 'ROOT', Path(directory)):
+            storage.save('experiment', {'id': 'exp', 'snapshot': {
+                'config': {'cost_bps': 5}, 'dataset': {'id': 'd'}, 'target': {'task': 'binary'}}})
+            storage.save('run', {'id': 'r', 'experiment_id': 'exp', 'status': 'completed'})
+            report = {'execution': {'fee_bps': 8, 'slippage_bps': 3, 'position_pct': .4},
+                      'strategy': {'threshold': .7}, 'rows': [{'bar_index': 2, 'prediction': .8}]}
+            (Path(directory) / 'r.json').write_text(json.dumps(report))
+            defaults = backtest_submission.settings('exp', 'r')
+            with patch('quant.data.load', return_value=self.frame()):
+                record = backtest_submission.create(BacktestIn(name='test', experiment_id='exp', run_id='r'))
+            self.assertEqual(defaults['threshold'], record['source']['threshold'])
+            self.assertEqual(defaults['threshold'], .7)
+            for key, value in report['execution'].items():
+                self.assertEqual(defaults[key], value)
+                self.assertEqual(record['config'][key], value)
+
     def test_invalid_predictions(self):
         for rows in ([{'bar_index': 7, 'prediction': .5}],
                      [{'bar_index': 1, 'prediction': .5}] * 2,

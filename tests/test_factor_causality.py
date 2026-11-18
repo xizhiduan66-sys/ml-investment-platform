@@ -5,9 +5,7 @@
 
     compute(前 k 根) 必须与 compute(全部) 的前 k 根逐点一致
 
-当前仓库的 5 个因子都是事件型（scope='event'，取值来自事件首次可见时冻结的
-上下文），所以真正受这条守门约束的是因子插件机制。一旦有人注册了
-scope='series' / 'sample' 的新因子，这个测试会自动把它纳入检查。
+事件型因子从首次可见时冻结的上下文取值。逐 K 线因子及逐样本因子都纳入截断对照。
 """
 import unittest
 
@@ -70,10 +68,11 @@ class CausalityHarnessTest(unittest.TestCase):
 class RegisteredFactorTest(unittest.TestCase):
     @unittest.skipIf(not NON_EVENT, '当前没有 series/sample 因子，守门器只对待注册插件生效')
     def test_series_and_sample_factors_are_causal(self):
-        df = bars()
+        df = bars(6000)
         for spec in NON_EVENT:
             params = {param.name: param.default for param in spec.params if param.default is not None}
             record = {'id': 'probe', 'spec_id': spec.id, 'params': params}
+            self.assertTrue(np.isfinite(factors.compute(df, record)).any(), f'{spec.id} 无有效值')
             for k in (len(df) // 2, len(df) - 1):
                 self.assertEqual(mismatches(lambda frame: factors.compute(frame, record), df, k), [],
                                  f'{spec.id} 在只看前 {k} 根时结果不同')

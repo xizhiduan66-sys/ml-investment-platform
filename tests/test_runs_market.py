@@ -30,7 +30,7 @@ class RunsMarketTest(unittest.TestCase):
         self.assertEqual(runs.definition('abc'), original)
         self.assertNotIn('status', original)
         self.assertEqual(storage.get('run', first['id'])['summary'], {'score': 1})
-        self.assertEqual(storage.get('experiment', 'abc')['latest_run_id'], second['id'])
+        self.assertEqual(runs.latest('abc')['latest_run_id'], second['id'])
 
     def test_market_atomic_dedup_and_dispatch(self):
         with ThreadPoolExecutor(max_workers=4) as pool:
@@ -61,7 +61,7 @@ class RunsMarketTest(unittest.TestCase):
         executions = runs.list_for('old')
         self.assertEqual(len(executions), 1)
         self.assertEqual(executions[0]['artifact_id'], 'old')
-        self.assertEqual(storage.get('experiment', 'old')['summary'], {'score': 2})
+        self.assertEqual(runs.latest('old')['summary'], {'score': 2})
 
     def test_run_detail_and_delete_all_artifacts(self):
         from quant.app import run_detail, delete_experiment

@@ -1,4 +1,5 @@
-import {paramField,collectParams} from './parameter-fields.mjs';
+import {eventRuleSummary} from './event-rules.mjs?v=general-events-1';
+import {paramField,collectParams} from './parameter-fields.mjs?v=general-events-1';
 import {groupedModels,initialModel} from './model-catalog.mjs';
 const esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const day=value=>String(value||'').slice(0,10);
@@ -140,9 +141,7 @@ export function mountExperimentWizard({catalog,inventory,copy,datasetId,factorId
     q('#wizard-event-rule').closest('.field').hidden=!eventMode;
     const ruleNote=q('#wizard-event-rule-note');
     ruleNote.hidden=!eventMode;
-    ruleNote.textContent=eventMode&&eventRule
-      ?`规则 v${eventRule.version}${eventRule.provider==='rsi_oversold'?` · RSI ${eventRule.params.window} · 跌破 ${eventRule.params.threshold} 时触发`:''}`
-      :'';
+    ruleNote.textContent=eventMode?eventRuleSummary(eventRule,catalog.events?.providers):'';
     if(resetEventTypes){
       const enabled=new Set(eventRule?.params?.types||[]);
       form.querySelectorAll('[name=event_types]').forEach(input=>input.checked=enabled.has(input.value));

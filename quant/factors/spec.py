@@ -62,6 +62,8 @@ class FactorSpec:
     requires: Tuple[str, ...] = ()
     compute: Optional[Callable[..., Any]] = field(default=None, compare=False, repr=False)
     event_source: Optional[str] = None
+    default_note: str = ""
+    validate_params: Optional[Callable[[dict], None]] = field(default=None, compare=False, repr=False)
 
     def param_schema(self):
         return param_schema(self.params)
@@ -109,6 +111,9 @@ def canonical_params(spec, params):
         if value is None:
             raise ValueError("因子 %s 缺少参数 %s" % (spec.id, p.name))
         merged[p.name] = p.validate(value)
+    validator = getattr(spec, 'validate_params', None)
+    if validator is not None:
+        validator(merged)
     return merged
 
 

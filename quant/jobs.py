@@ -51,7 +51,7 @@ def enqueue(experiment):
         if key:
             prior = db.execute('SELECT experiment_id FROM submission_keys WHERE key=?', (key,)).fetchone()
             if prior:
-                return storage.get('experiment', prior[0])
+                return runs.latest(prior[0])
         count = db.execute("SELECT count(*) FROM research_jobs WHERE status IN ('queued','running')").fetchone()[0]
         if count >= 4:
             raise ValueError('运行队列已满，请等待当前任务完成')

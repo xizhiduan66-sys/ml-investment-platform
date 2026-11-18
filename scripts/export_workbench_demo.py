@@ -41,17 +41,26 @@ def export_fixture():
         'eventTypes': contents['chan_event']['types'],
         'experimentFields': ExperimentIn.model_json_schema()['properties'],
     }
-    record = create_backtest(BacktestIn(name='SMA 示例回测', source='sma', dataset_id=saved['id']))
-    result = record['result']
-    fixture['backtest'] = {key: record[key] for key in ('name', 'source', 'config', 'metrics', 'period', 'engine_version')}
-    fixture['backtest']['equity'] = [
-        {'date': row['time'], 'equity': row['equity'], 'benchmark': row['benchmark']}
-        for row in result['rows']
-    ]
-    fixture['backtest']['orders'] = result['orders'][-20:]
     fixture['trainingExample'] = None
     adapter = next((model for model in contents['models']
                     if model['input'] == 'vector' and model['available'] and 'regression' in model['tasks']), None)
+    fixture['backtest'] = None
+    if adapter is not None:
+        submitted = create_experiment(ExperimentIn(
+            name='逐 K 线收益回归', dataset_id=saved['id'], target_id='forward_return',
+            model=adapter['id'], factor_ids=['momentum.rsi'], auto_backtest=False,
+        ))
+        worker = 'workbench-fixture'
+        execute(jobs.claim(worker), worker)
+        record = create_backtest(BacktestIn(name='实验预测示例回测', experiment_id=submitted['id'],
+                                            run_id=submitted['latest_run_id']))
+        result = record['result']
+        fixture['backtest'] = {key: record[key] for key in ('name', 'source', 'config', 'metrics', 'period', 'engine_version')}
+        fixture['backtest']['equity'] = [
+            {'date': row['time'], 'equity': row['equity'], 'benchmark': row['benchmark']}
+            for row in result['rows']
+        ]
+        fixture['backtest']['orders'] = result['orders'][-20:]
     example_factors = ['chan.side', 'chan.retrace']
     if adapter is not None and set(example_factors) <= {item['id'] for item in features}:
         jobs.initialize()

@@ -39,6 +39,10 @@ def definition(experiment_id):
     return json.loads(row[0])
 
 
+def latest(experiment_id):
+    return project(definition(experiment_id))
+
+
 def merge(record, latest):
     """把最新一次运行的状态投影到实验定义上（含删除中保护）。"""
     if latest is None or record.get('status') == 'deleting':
@@ -58,10 +62,14 @@ def projected_all():
         experiments = [json.loads(row[0]) for row in
                        db.execute("SELECT body FROM objects WHERE kind='experiment' ORDER BY rowid DESC")]
         latest = {}
+        completed = set()
         for body in db.execute("SELECT body FROM objects WHERE kind='run' ORDER BY rowid DESC"):
             run = json.loads(body[0])
+            if run['status'] == 'completed':
+                completed.add(run['experiment_id'])
             latest.setdefault(run['experiment_id'], run)
-    return [merge(record, latest.get(record['id'])) for record in experiments]
+    return [{**merge(record, latest.get(record['id'])), 'has_completed_run': record['id'] in completed}
+            for record in experiments]
 
 
 def execution(run_id):
