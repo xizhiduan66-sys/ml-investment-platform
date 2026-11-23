@@ -49,8 +49,8 @@ def _history_response(request):
         raise
 
 
-def _get(path, **params):
-    url = BASE + path + '?' + urllib.parse.urlencode(params)
+def _get(path, *, base=BASE, **params):
+    url = base + path + '?' + urllib.parse.urlencode(params)
     request = urllib.request.Request(url, headers={
         'User-Agent': 'QuantResearch/1.0', 'Accept': 'application/json',
     })
@@ -91,6 +91,14 @@ def _instrument(symbol):
 
 def preview(symbol):
     return _get('/market/candles', instId=_instrument(symbol), bar='1m', limit=100)
+
+
+def open_interest_page(symbol, period, *, before=None):
+    params = {'instId': _instrument(symbol), 'period': BARS.get(period, period), 'limit': 100}
+    if before is not None:
+        params['end'] = before
+    return _get('/rubik/stat/contracts/open-interest-history',
+                base='https://openapi.okx.com/api/v5', **params)
 
 
 def _page(symbol, period, before, limit):

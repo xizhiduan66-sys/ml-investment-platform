@@ -35,6 +35,11 @@ CREATE TABLE IF NOT EXISTS bars (
  reconstructed INTEGER NOT NULL,
  PRIMARY KEY(symbol, period, ts)
 ) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS open_interest (
+ symbol TEXT NOT NULL, period TEXT NOT NULL, ts_ms INTEGER NOT NULL,
+ oi_contracts REAL NOT NULL, oi_coin REAL NOT NULL, oi_usd REAL NOT NULL,
+ PRIMARY KEY(symbol, period, ts_ms)
+) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS revisions (
  symbol TEXT PRIMARY KEY, version INTEGER NOT NULL
 );

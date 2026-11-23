@@ -11,7 +11,8 @@ from pydantic import BaseModel, Field
 from . import targets, planning, backtest_submission, experiment_submission, jobs, runs, archive, market_queue
 from . import data, factors, models, storage, chan_events, market, market_jobs
 from . import triggers
-from .research_inputs import BacktestIn, ExperimentIn, MarketRange, TriggerIn
+from . import event_inputs
+from .research_inputs import BacktestIn, EventFeatureIn, ExperimentIn, MarketRange, TriggerIn
 from .feature_catalog import feature_records, registered_features
 from .splits import bounds as split_bounds
 
@@ -30,7 +31,7 @@ async def lifespan(app):
     yield
 
 
-app = FastAPI(title='单标的研究台 API', lifespan=lifespan)
+app = FastAPI(title='Candlestick Dance（K线跳动）API', lifespan=lifespan)
 
 
 @app.exception_handler(ValueError)
@@ -145,7 +146,8 @@ class PreflightIn(BaseModel):
     target_id: str
     target_params: Dict[str, Any] = Field(default_factory=dict)
     model_params: Dict[str, Any] = Field(default_factory=dict)
-    factor_ids: List[str] = Field(min_length=1, max_length=30)
+    factor_ids: List[str] = Field(default_factory=list, max_length=30)
+    event_features: List[EventFeatureIn] = Field(default_factory=list, max_length=30)
 
 
 @app.post('/api/research/preflight')
@@ -154,8 +156,11 @@ def research_preflight(inp: PreflightIn):
     records = feature_records(inp.factor_ids)
     trigger = triggers.request(inp.trigger, inp.sample_mode, inp.event_types)
     planning.validate_features(records, trigger)
-    manifest = factors.build_manifest(records)
-    return {'plan': planning.compile_plan({**inp.model_dump(), 'trigger': trigger}, target), 'manifest': manifest.to_dict()}
+    events = event_inputs.freeze(inp.event_features)
+    plan = planning.compile_plan({**inp.model_dump(), 'trigger': trigger}, target)
+    event_inputs.validate_count(inp.factor_ids, events)
+    manifest = factors.build_manifest(records, events)
+    return {'plan': plan, 'manifest': manifest.to_dict()}
 
 
 @app.post('/api/event-rules', status_code=201)
@@ -174,6 +179,18 @@ def preview_event_rule(rule_id: str, dataset_id: str):
         raise ValueError('缠论事件预览最多回放 10000 根 K 线，请选择较短的行情快照')
     events = triggers.replay(data.load(dataset), rule)['events']
     return {'count': len(events), 'events': events[-50:]}
+
+
+@app.post('/api/event-features/preview/{dataset_id}')
+def preview_event_feature(dataset_id: str, inp: EventFeatureIn):
+    feature, = event_inputs.freeze([inp])
+    dataset = storage.get('dataset', dataset_id)
+    if feature['provider'] == 'chan' and dataset['rows'] > 10000:
+        raise ValueError('缠论事件预览最多回放 10000 根 K 线，请选择较短的行情快照')
+    df = data.load(dataset)
+    marks = event_inputs.mark_bars(len(df), triggers.replay(df, feature))
+    triggered = df.date.iloc[marks.nonzero()[0]]
+    return {'count': len(triggered), 'recent': triggered.tail(8).tolist()}
 
 
 @app.get('/api/chan-events/{dataset_id}')

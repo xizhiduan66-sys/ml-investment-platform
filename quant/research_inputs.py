@@ -33,6 +33,13 @@ class TriggerIn(BaseModel):
     rule_id: Optional[str] = None
 
 
+class EventFeatureIn(BaseModel):
+    rule_id: str
+    name: Optional[str] = Field(default=None, min_length=1, max_length=100)
+    version: Optional[int] = Field(default=None, ge=1)
+    params: Dict[str, Any] = Field(default_factory=dict)
+
+
 class ExperimentIn(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     dataset_id: Optional[str] = None
@@ -40,6 +47,7 @@ class ExperimentIn(BaseModel):
     source_experiment_id: Optional[str] = None
     factor_ids: List[str] = Field(default_factory=list, max_length=30)
     factor_set_id: Optional[str] = None
+    event_features: List[EventFeatureIn] = Field(default_factory=list, max_length=30)
     target_id: str
     target_version: Optional[int] = Field(default=None, ge=1)
     target_params: Dict[str, Any] = Field(default_factory=dict)
@@ -51,8 +59,4 @@ class ExperimentIn(BaseModel):
     lookback: int = Field(default=30, ge=3, le=120)
     epochs: int = Field(default=10, ge=1, le=100)
     submission_key: Optional[str] = Field(default=None, max_length=128)
-    auto_backtest: bool = True
     diagnostic_runs: int = Field(default=1, ge=1, le=3)
-    cost_bps: float = Field(default=5, ge=0, le=100)
-    entry_threshold: float = Field(default=0, ge=0, le=.5)
-    probability_threshold: float = Field(default=.55, ge=0, le=1)

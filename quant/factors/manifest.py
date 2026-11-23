@@ -59,7 +59,7 @@ class FeatureManifest:
         }
 
 
-def build_manifest(instances):
+def build_manifest(instances, event_features=()):
     entries = []
     seen = set()
     for index, record in enumerate(instances):
@@ -81,5 +81,15 @@ def build_manifest(instances):
             dtype="float64",
             missing=factor_spec.missing,
             params=params,
+        ))
+    for feature in event_features:
+        identifier = feature['id']
+        if identifier in seen:
+            raise ValueError(f'事件特征重复：{feature["name"]}')
+        seen.add(identifier)
+        entries.append(FeatureEntry(
+            id=identifier, spec_id='event.occurred', instance_id=identifier,
+            name=feature['name'], version=1, index=len(entries), dtype='float64',
+            missing='neutral', params={key: feature[key] for key in ('provider', 'version', 'params')},
         ))
     return FeatureManifest(version=1, features=tuple(entries))

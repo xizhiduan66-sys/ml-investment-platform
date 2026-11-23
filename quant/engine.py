@@ -48,7 +48,7 @@ def run(experiment_id):
         event_mode = trigger['kind'] == 'event'
         task = target['task']
         classes = tuple(targets.class_names(target))
-        manifest = factors.build_manifest(snap['factors'])
+        manifest = factors.build_manifest(snap['factors'], snap.get('event_features', ()))
         expected = (snap.get('manifest') or {}).get('hash')
         if expected and expected != manifest.hash:
             raise ValueError('因子清单与实验快照不一致，请基于当前因子重新创建实验')
@@ -69,7 +69,7 @@ def run(experiment_id):
         prepared = {name: PreparedDataset(tuple(batch.ids[i] for i in ids), inputs[name], y[ids])
                     for name, ids in partitions.items()}
         trained, predictions = pipeline.train_and_predict(config, task, prepared, progress, classes=classes)
-        pred, artifact, history = predictions['test'].values, trained.artifact, trained.history
+        artifact, history = trained.artifact, trained.history
         fitted = {'predictions': {name: output.values for name, output in predictions.items()},
                   'model': trained.diagnostics}
         samples = {name: {'y': y[ids], 'pred': fitted['predictions'][name], 'dates': df.date.iloc[observations[ids]].tolist()}
@@ -144,34 +144,8 @@ def run(experiment_id):
                 result.update(kind='chan_event', rows=chan_test, event_report=batch.report)
             else:
                 result.update(kind='event', rows=test_rows, event_report=batch.report)
-            result.update(trades=[], policy='事件在首次可见时取样，按所选目标成熟时间确定标签。')
-        elif not can_trade or not config.get('auto_backtest', True):
-            result.update(kind='prediction_only', rows=test_rows, trades=[],
-                          policy='已保存样本外预测和模型诊断。')
         else:
-            # Carry an explicit zero position over isolated missing-feature bars.
-            all_test = np.arange(test[0], test[-1] + 1)
-            full_pred = np.full(len(all_test), np.nan)
-            full_pred[test - test[0]] = pred
-            rows, trades, trading = simulate(df, all_test, full_pred, target['task'], config)
-            observed = set(test)
-            for row in rows:
-                i = row['bar_index']
-                row['valid_prediction'] = i in observed
-                if i not in observed:
-                    row['prediction'] = None
-                row['label'] = float(y[i]) if np.isfinite(y[i]) else None
-                row['features'] = {key: float(value) if np.isfinite(value) else None
-                                   for key, value in zip(features.columns, array[i])}
-            result.update(
-                rows=rows, trades=trades, metrics={**metrics, **trading},
-                strategy=policies.threshold_policy(task, config).definition(),
-                engine_version=backtest.ENGINE_VERSION,
-                execution={'fee_bps': config['cost_bps'], 'slippage_bps': 0., 'position_pct': 1.},
-                policy='收盘决策，下一根开盘成交，逐根收盘计价，最后一个信号在下一根开盘执行后于该根收盘平仓。'
-                       '只做多或空仓，连续份额，无涨跌停/停牌撮合。实验 cost_bps 作为单侧手续费，滑点为零；'
-                       '独立回测使用相同成本和风控参数时结果一致。缺失预测为空仓。',
-            )
+            result.update(kind='prediction_only', rows=test_rows)
         artifact_path = storage.ROOT / (experiment_id + '.pkl')
         with artifact_path.open('wb') as f:
             pickle.dump(artifact, f)

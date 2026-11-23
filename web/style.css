@@ -202,7 +202,8 @@ dialog.experiment-dialog{width:min(1000px,96vw)}
 .task-card { white-space:normal; min-height:64px; text-align:left; }
 .wizard-steps { flex-wrap:wrap; }
 
-.sidebar .brand{margin-bottom:24px;letter-spacing:.06em;font-size:22px}
+.sidebar .brand{margin-bottom:24px;font-size:18px;line-height:1.25}
+.sidebar .brand small{display:block;margin-top:4px;font-size:13px;color:var(--muted)}
 .sidebar #nav{display:grid;gap:4px}
 .sidebar #nav button{margin:0;padding:11px 13px;color:var(--muted);font-weight:550}
 .sidebar #nav button.active{color:var(--accent);background:#edf2ff}

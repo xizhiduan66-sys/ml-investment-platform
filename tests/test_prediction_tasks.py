@@ -73,7 +73,12 @@ class PredictionTasksTest(unittest.TestCase):
                     job = create_experiment(ExperimentIn(name=target, dataset_id=snapshot['id'],
                                             factor_ids=['momentum.rsi'], model='lightgbm',
                                             model_params={'n_estimators': 10}, target_id=target, trigger=trigger))
-                    execute(jobs.claim('test-worker'), 'test-worker')
+                    if trigger.kind == 'bar':
+                        legacy = runs.definition(job['id'])
+                        legacy['snapshot']['config']['auto_backtest'] = True
+                        storage.save('experiment', legacy)
+                    with patch('quant.backtest.run', side_effect=AssertionError('训练触发了回测')):
+                        execute(jobs.claim('test-worker'), 'test-worker')
                     finished = experiment(job['id'])
                     self.assertEqual(finished['status'], 'completed', finished['message'])
                     result = finished['result']
@@ -102,4 +107,9 @@ class PredictionTasksTest(unittest.TestCase):
                                                             finished['snapshot']['dataset'], 'binary')
                         self.assertEqual(decoded[0]['prediction'], decoded[0]['probabilities'][1])
                         replay = create_backtest(BacktestIn(name='交易', source='experiment', experiment_id=job['id']))
-                        self.assertAlmostEqual(replay['metrics']['net_return'], result['metrics']['net_return'])
+                        self.assertEqual(result['kind'], 'prediction_only')
+                        self.assertNotIn('trades', result)
+                        self.assertNotIn('net_return', finished['summary'])
+                        self.assertNotIn('max_drawdown', result['metrics'])
+                        self.assertIn('auc', finished['summary'])
+                        self.assertIn('net_return', replay['metrics'])

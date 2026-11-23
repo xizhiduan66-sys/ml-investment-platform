@@ -34,9 +34,9 @@ function featureCompatibility(factorIds,eventProvider,eventFeatures){
   const names=factorIds.map(id=>eventFeatures.get(id)).filter(f=>f&&f.provider!==eventProvider).map(f=>f.name);
   return names.length?`「${names.join('、')}」需要匹配的事件来源，请更换特征或触发规则。`:'';
 }
-export function wizardError(step,{dataset,factorIds=[],model,target,params={},eventProvider=null,eventFeatures=new Map()}){
+export function wizardError(step,{dataset,factorIds=[],eventFeatureCount=0,model,target,params={},eventProvider=null,eventFeatures=new Map()}){
   if(step===0&&!dataset)return '请选择可用的行情区间';
-  if(step===1&&(!factorIds.length||factorIds.length>30))return '请选择 1–30 个特征';
+  if(step===1&&(factorIds.length+eventFeatureCount<1||factorIds.length+eventFeatureCount>30))return '请选择 1–30 个特征';
   if(step===1)return featureCompatibility(factorIds,eventProvider,eventFeatures);
   if(step===2){
     if(!model?.available||!model.tasks.includes(target?.task))return '当前模型不可用或不支持所选目标';
@@ -99,7 +99,9 @@ export function mountExperimentWizard({catalog,inventory,copy,datasetId,factorId
     <div class="wizard-filter"><input type="search" id="wizard-feature-search" placeholder="搜索特征名称或分类" aria-label="搜索特征"><span class="badge gray" id="wizard-feature-count"></span></div>
     <p id="wizard-feature-warning" class="error" role="status" hidden></p>
     <div class="check-list wizard-features">${factors.map(f=>`<label data-feature-search="${esc((f.name+' '+f.category).toLocaleLowerCase())}"><input type="checkbox" name="factor_ids" value="${esc(f.id)}" ${selectedIds.has(f.id)?'checked':''}><span>${esc(f.name)}<small>${esc(Object.entries(f.params||{}).map(([k,v])=>k+'='+v).join(' · '))}</small></span><span class="badge gray">${esc(f.category)}</span></label>`).join('')}</div>
-    <p id="wizard-feature-empty" class="sub" hidden>没有匹配的特征；已勾选的其他特征仍然保留。</p><p id="wizard-feature-help" class="sub"></p></section>
+    <p id="wizard-feature-empty" class="sub" hidden>没有匹配的特征；已勾选的其他特征仍然保留。</p><p id="wizard-feature-help" class="sub"></p>
+    <h3>事件特征</h3><p class="sub">本根 K 线首次触发填 1，其余填 0。每条配置生成一列。</p>
+    <div id="wizard-event-inputs"></div><button type="button" class="btn" id="wizard-add-event-input" ${eventRules.length?'':'disabled'}>添加事件特征</button></section>
     <section data-wizard-panel="2" hidden><div class="section-heading"><div><h3>模型与训练</h3><p>选择预测目标，配置模型及训练参数。</p></div></div>
     ${input('实验名称','name',copy?copy.name+' · 副本':'单标的研究','type="text" required maxlength="100"')}
     <div class="form-grid">${select('预测目标','target_id','')}${select('训练模型','model','')}</div>
@@ -128,8 +130,71 @@ export function mountExperimentWizard({catalog,inventory,copy,datasetId,factorId
   taskDefinition.before(q('#wizard-events'),q('#target_id').closest('.field'));
   taskPanel.append(q('#wizard-target-params'),q('#wizard-model-output'));
   form.getTrigger=()=>eventMode?{kind:'event',rule_id:eventRule?.id}:{kind:'bar'};
+  const eventInputList=q('#wizard-event-inputs');
+  function addEventInput(saved){
+    const row=document.createElement('fieldset');
+    row.className='field';
+    row.innerHTML=`<legend>事件规则</legend><select aria-label="事件规则">${eventRules.map(rule=>option(rule.id,rule.name,rule.id===saved?.rule_id)).join('')}</select>
+      <label class="field">特征名称（可选）<input data-event-name maxlength="100" value="${esc(saved?.name||'')}" placeholder="例如 缠论二买"></label>
+      <div class="form-grid" data-event-params></div><p class="sub" data-event-status role="status"></p><div class="actions"><button type="button" class="btn small" data-preview>预览标记</button>
+      <button type="button" class="btn small" data-remove>移除</button></div>`;
+    const picker=row.querySelector('select'), fields=row.querySelector('[data-event-params]');
+    const preview=row.querySelector('[data-preview]'), status=row.querySelector('[data-event-status]');
+    function renderRule(frozen){
+      const rule=eventRules.find(item=>item.id===picker.value);
+      const provider=catalog.events?.providers.find(item=>item.id===rule?.provider);
+      const params=frozen?.params||rule?.params||{};
+      row.eventRuleVersion=frozen?.version||rule?.version;
+      const types=Object.entries(provider?.types||(rule?.provider==='chan'?Object.fromEntries(eventTypes):{}));
+      fields.innerHTML=(provider?.parameters||[]).map(param=>paramField({...param,default:params[param.name]??param.default})).join('')+
+        (types.length?`<fieldset><legend>事件类型</legend>${types.map(([key,label])=>`<label><input type="checkbox" data-event-type value="${esc(key)}" ${params.types?.includes(key)?'checked':''}> ${esc(label)}</label>`).join(' ')}</fieldset>`:'');
+      status.textContent='';
+    }
+    row.eventInput=()=>{
+      const types=[...fields.querySelectorAll('[data-event-type]')];
+      const params=collectParams(fields);
+      if(types.length)params.types=types.filter(el=>el.checked).map(el=>el.value);
+      if(types.length&&!params.types.length)throw Error('请选择至少一种事件类型');
+      const name=row.querySelector('[data-event-name]').value.trim();
+      return {rule_id:picker.value,version:row.eventRuleVersion,params,...(name?{name}:{})};
+    };
+    picker.onchange=()=>renderRule();
+    preview.onclick=async()=>{
+      const dataset=chosenDataset();
+      if(!catalog.datasets.some(item=>item.id===dataset?.id)){
+        status.textContent='选择已保存的行情快照后可以预览标记。';
+        return;
+      }
+      preview.disabled=true;
+      try{
+        const feature=row.eventInput();
+        status.textContent='正在计算标记…';
+        const response=await fetch('/api/event-features/preview/'+encodeURIComponent(dataset.id),{
+          method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(feature),
+        });
+        const value=await response.json();
+        if(!response.ok)throw Error(typeof value.detail==='string'?value.detail:'无法预览事件特征');
+        if(JSON.stringify(feature)!==JSON.stringify(row.eventInput())||chosenDataset()?.id!==dataset.id){
+          status.textContent='';
+          return;
+        }
+        status.textContent=`共 ${value.count} 根标记为 1。`+(value.recent.length?`最近触发（UTC） ${value.recent.join('、')}`:'');
+      }catch(error){status.textContent=error.message}
+      finally{preview.disabled=false}
+    };
+    row.querySelector('[data-remove]').onclick=()=>{row.remove();form.dispatchEvent(new Event('input'))};
+    renderRule(picker.value===saved?.rule_id?saved:undefined);
+    eventInputList.append(row);
+  }
+  form.getEventInputs=()=>[...eventInputList.children].map(row=>row.eventInput());
+  q('#wizard-add-event-input').onclick=()=>{
+    if(eventInputList.childElementCount>=30)return;
+    addEventInput();
+    form.dispatchEvent(new Event('input'));
+  };
+  for(const feature of (copy?.snapshot.event_features||[]))addEventInput(feature);
   const confirm=document.createElement('section');confirm.dataset.wizardPanel='4';confirm.hidden=true;
-  confirm.innerHTML='<h3>确认研究计划</h3><div id="confirm-plan"></div><p>时间顺序划分：训练 60% / 验证 20% / 测试 20%。剔除标签跨界样本，转换器只拟合训练数据。</p><p>有效训练样本数量将在计算特征与标签后检查。</p><label><input type="checkbox" name="auto_backtest" id="auto-backtest" checked> 训练后运行默认阈值策略回测</label><p id="worker-readiness" role="status"></p><button type="button" class="btn" id="check-plan">检查研究计划</button><div id="plan-check" role="status"></div>';
+  confirm.innerHTML='<h3>确认研究计划</h3><div id="confirm-plan"></div><p>时间顺序划分：训练 60% / 验证 20% / 测试 20%。剔除标签跨界样本，转换器只拟合训练数据。</p><p>有效训练样本数量将在计算特征与标签后检查。</p><p id="worker-readiness" role="status"></p><button type="button" class="btn" id="check-plan">检查研究计划</button><div id="plan-check" role="status"></div>';
   q('[data-wizard-panel="3"]').after(confirm);
   confirm.prepend(q('[name=name]').closest('.field'));
   q('[data-wizard-panel="3"] h3').textContent='选择兼容模型';
@@ -148,8 +213,6 @@ export function mountExperimentWizard({catalog,inventory,copy,datasetId,factorId
     }
     syncMode();
     renderChoices(targetId,modelId);
-    q('#auto-backtest').disabled=eventMode||targets.find(t=>t.id===q('#target_id').value)?.task==='multiclass';
-    if(q('#auto-backtest').disabled)q('#auto-backtest').checked=false;
     form.submissionKey=crypto.randomUUID();
     checkToken++;
     q('#plan-check').textContent='任务已变化，请重新检查';
@@ -187,7 +250,7 @@ export function mountExperimentWizard({catalog,inventory,copy,datasetId,factorId
     const token=++checkToken;q('#plan-check').textContent='正在检查…';
     try{const target=targets.find(t=>t.id===q('#target_id').value);
       const targetParams=collectParams(q('#wizard-target-params'));
-      const response=await fetch('/api/research/preflight',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:q('#model').value,trigger:form.getTrigger(),sample_mode:currentMode(),event_types:eventProvider()==='chan'?chosenTypes():undefined,target_id:target.id,target_params:targetParams,model_params:collectModelParams(form),factor_ids:chosen()})});
+      const response=await fetch('/api/research/preflight',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:q('#model').value,trigger:form.getTrigger(),sample_mode:currentMode(),event_types:eventProvider()==='chan'?chosenTypes():undefined,target_id:target.id,target_params:targetParams,model_params:collectModelParams(form),factor_ids:chosen(),event_features:form.getEventInputs()})});
       const result=await response.json();if(!response.ok)throw Error(typeof result.detail==='string'?result.detail:'配置检查失败');
       if(token===checkToken)q('#plan-check').textContent='任务、特征与模型兼容性检查通过；有效样本数仍需在计算阶段确认。';
     }catch(error){if(token===checkToken)q('#plan-check').textContent=error.message}
@@ -200,7 +263,7 @@ export function mountExperimentWizard({catalog,inventory,copy,datasetId,factorId
   footer.insertBefore(back,submit);footer.insertBefore(next,submit);submit.textContent='创建实验并加入队列';
   let step=0,paramKey='',paramCache={},paramsReady=false;
   // Preserve existing execution defaults only when copying, without creating a fourth step.
-  form.experimentDefaults=copy?Object.fromEntries(['cost_bps','entry_threshold','probability_threshold'].filter(k=>c[k]!=null).map(k=>[k,c[k]])):{};
+  form.experimentDefaults={};
   const chosen=()=>{
     const set=catalog.factor_sets.find(s=>s.id===q('#factor_set_id').value);
     return set?set.factor_ids:[...form.querySelectorAll('[name=factor_ids]:checked:not(:disabled)')].map(el=>el.value);
@@ -229,7 +292,7 @@ export function mountExperimentWizard({catalog,inventory,copy,datasetId,factorId
     q('#wizard-model-params').innerHTML=schema.map(p=>`<div class="field"><label for="mp-${p.name}">${esc(p.label)}</label><input id="mp-${p.name}" data-model-param="${esc(p.name)}" type="number" value="${esc(prior[p.name]??p.default)}" min="${p.minimum}" max="${p.maximum}" step="${p.kind==='int'?'1':'any'}" required><small>范围 ${p.minimum}–${p.maximum} · 默认 ${p.default}</small></div>`).join('')||'<p class="sub">请选择可用模型以配置训练参数。</p>';
     const seq=model?.input==='sequence';q('#wizard-sequence').hidden=!seq;q('#lookback').disabled=!seq;q('#epochs').disabled=!seq;
     q('#wizard-model-output').textContent=target?.description||'当前采样方式没有可用目标。';
-    q('#wizard-training-help').textContent=eventMode||target?.task==='multiclass'?'本任务展示样本外预测和模型诊断。':'训练生成模型诊断；可在确认页选择是否自动回测。';
+    q('#wizard-training-help').textContent='训练完成后保存模型、样本外预测和诊断。';
     paramKey=key;paramsReady=true;summary();
   }
   const marketPanel=q('#wizard-market'),marketStatus=q('#wizard-market-status'),syncButton=q('#wizard-market-sync');
@@ -350,7 +413,7 @@ export function mountExperimentWizard({catalog,inventory,copy,datasetId,factorId
     const dataset=chosenDataset(),m=catalog.models.find(m=>m.id===q('#model').value),target=targets.find(t=>t.id===q('#target_id').value);
     const params=Object.fromEntries([...q('#wizard-target-params').querySelectorAll('[data-param]')].map(el=>[el.dataset.param,el.value]));
     q('#task-definition').textContent=target?.kind==='chan_structure'?'在候选买卖点首次可见时，预测它最终是否被结构确认。':`${eventMode?'在事件首次可见时':'每根 K 线收盘后'}，预测从下一根开盘开始、持有 ${params.horizon||target?.horizon||'—'} 根 K 线的${target?.task==='binary'?`收益超过 ${params.threshold??target?.threshold??'—'} 的概率`:target?.task==='multiclass'?'收益分档概率（下跌、横盘、上涨）':'收益率'}。`;
-    const chosenIds=chosen(),n=chosenIds.length,meta=dataset?datasetIdentity(dataset):null;
+    const chosenIds=chosen(),n=chosenIds.length+eventInputList.childElementCount,meta=dataset?datasetIdentity(dataset):null;
     const warning=featureCompatibility(chosenIds,eventProvider(),eventFeatures);
     const audit=marketAuditText(dataset?.market_audit);
     q('#wizard-feature-warning').textContent=warning;
@@ -369,7 +432,10 @@ export function mountExperimentWizard({catalog,inventory,copy,datasetId,factorId
   function valid(index){
     const fields=form.querySelector(`[data-wizard-panel="${index}"]`).querySelectorAll('input,select');
     for(const field of fields)if(!field.disabled&&!field.checkValidity()){show(index);field.reportValidity();return false}
-    const error=index===0?(taskError()):index===4?'':wizardError(index-1,{dataset:chosenDataset(),factorIds:chosen(),
+    if(index===2){
+      try{form.getEventInputs()}catch(e){show(index);q('#form-error').textContent=e.message;return false}
+    }
+    const error=index===0?(taskError()):index===4?'':wizardError(index-1,{dataset:chosenDataset(),factorIds:chosen(),eventFeatureCount:eventInputList.childElementCount,
       model:catalog.models.find(m=>m.id===q('#model').value),target:targets.find(t=>t.id===q('#target_id').value),eventProvider:eventProvider(),eventFeatures,
       params:index===3?collectModelParams(form):{}});
     if(error){show(index);q('#form-error').textContent=error;return false}return true;
@@ -448,5 +514,5 @@ export function mountExperimentWizard({catalog,inventory,copy,datasetId,factorId
   });
   intervals(initial?.id);
   syncTask(startFromTemplate(taskTemplateId)||copiedTargetId,c.model);
-  q('#auto-backtest').checked=!q('#auto-backtest').disabled&&(c.auto_backtest!==false);show(0);
+  show(0);
 }

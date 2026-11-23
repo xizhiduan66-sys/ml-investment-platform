@@ -121,4 +121,4 @@ def event_matrix(df, instances, events):
         else:
             series = compute(df, record)
             columns[key] = series.iloc[[event['observed_at'] for event in events]].to_numpy()
-    return pd.DataFrame(columns, dtype='float64')
+    return pd.DataFrame(columns, index=range(len(events)), dtype='float64')

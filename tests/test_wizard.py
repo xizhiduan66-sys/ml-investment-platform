@@ -29,10 +29,11 @@ class WizardTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, '向量'):
                 research_preflight(PreflightIn(model='lstm', sample_mode='chan_event', target_id='chan_structure_v1', factor_ids=['example']))
 
-    def test_auto_backtest_backward_compatible(self):
+    def test_legacy_trading_parameters_excluded_from_training(self):
         config = dict(name='test', model='lstm', target_id='forward_return')
-        self.assertTrue(ExperimentIn(**config).auto_backtest)
-        self.assertFalse(ExperimentIn(**config, auto_backtest=False).auto_backtest)
+        legacy = ExperimentIn(**config, auto_backtest=True, cost_bps=25, probability_threshold=.7)
+        self.assertEqual(legacy.model_dump(), ExperimentIn(**config).model_dump())
+        self.assertNotIn('auto_backtest', legacy.model_dump())
 
     def test_structure_label_preview_uses_loaded_snapshot(self):
         observed, confirmed = '2025-01-01T10:00:00Z', '2025-01-01T11:00:00Z'

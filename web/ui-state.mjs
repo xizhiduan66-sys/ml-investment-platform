@@ -15,12 +15,9 @@ export function comparisonDifferences(experiments) {
   if (experiments.length < 2) return [];
   const checks = [
     ['数据快照', e => e.snapshot.dataset.sha256],
-    ['标签定义', e => { const t = e.snapshot.target; return [t.task, t.horizon, t.task === 'binary' ? t.threshold : null]; }],
-    ['测试时间点', e => e.result.rows.map(r => r.signal_time)],
-    ['手续费', e => e.result.execution?.fee_bps ?? e.snapshot.config.cost_bps],
-    ['滑点', e => e.result.execution?.slippage_bps ?? 0],
-    ['开仓门槛', e => e.snapshot.config[e.snapshot.target.task === 'binary' ? 'probability_threshold' : 'entry_threshold']],
-    ['执行版本', e => e.result.engine_version ?? 'legacy'],
+    ['标签定义', e => e.snapshot.target],
+    ['采样规则', e => e.snapshot.config.trigger ?? e.snapshot.config.sample_mode],
+    ['测试时间点', e => (e.result.rows || []).map(r => r.sample_id ?? r.observed_at ?? r.signal_time ?? r.time)],
   ];
   return checks.filter(([, get]) => experiments.slice(1).some(e =>
     JSON.stringify(get(e)) !== JSON.stringify(get(experiments[0])))).map(([label]) => label);

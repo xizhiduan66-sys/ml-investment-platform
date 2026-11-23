@@ -10,6 +10,8 @@ def validate(df):
     required = ['date', 'open', 'high', 'low', 'close', 'volume']
     if any(c not in df for c in required):
         raise ValueError('CSV 必须包含 date,open,high,low,close,volume 六列')
+    extra = [key for key in ('oi_daily_contracts', 'buy_contracts', 'sell_contracts', 'oi_contracts') if key in df]
+    required.extend(extra)
     df = df[required].copy()
     dates = pd.to_datetime(df.date, errors='coerce', utc=True)
     if dates.isna().any() or dates.duplicated().any() or not dates.is_monotonic_increasing:
@@ -19,6 +21,8 @@ def validate(df):
         df[key] = pd.to_numeric(df[key], errors='coerce')
     if not np.isfinite(df[required[1:]].values).all():
         raise ValueError('行情含缺失或非有限数值')
+    if extra and (df[extra] < 0).any().any():
+        raise ValueError('成交张数和持仓张数不能为负')
     if (df[['open', 'high', 'low', 'close']] <= 0).any().any() or (df.volume < 0).any():
         raise ValueError('价格必须大于 0，成交量不能为负')
     if ((df.high < df[['open', 'close', 'low']].max(axis=1)) | (df.low > df[['open', 'close', 'high']].min(axis=1))).any():

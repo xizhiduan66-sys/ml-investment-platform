@@ -1,7 +1,7 @@
 """Common point-in-time feature, label and chronological split pipeline."""
 import numpy as np
 
-from . import factors, splits, targets, triggers
+from . import event_inputs, factors, splits, targets, triggers
 
 
 def partitions(indices, bars, ends, n):
@@ -19,6 +19,7 @@ def prepare(df, snapshot, target, window, progress):
     events = None if observations.report is None else observations.report['events']
     records = snapshot['factors']
     matrix = factors.matrix(df, records) if events is None else factors.event_matrix(df, records, events)
+    matrix = event_inputs.add_columns(matrix, df, snapshot, observations, progress)
     array = matrix.to_numpy()
     labels = targets.calculate(df, target, observations.bars, events=events)
     valid = np.isfinite(array).all(axis=1)
@@ -29,7 +30,7 @@ def prepare(df, snapshot, target, window, progress):
             mask[window - 1:] = (cumulative[window:] - cumulative[:-window]) == 0
         valid = mask
     indices = np.flatnonzero(valid & (labels.ends >= 0) & np.isfinite(labels.values))
-    if window > 1 and len(indices) * window * len(records) > 8000000:
+    if window > 1 and len(indices) * window * len(matrix.columns) > 8000000:
         raise ValueError('序列样本超过初版内存预算，请减少行情长度、窗口或因子数')
     groups = partitions(indices, observations.bars, labels.ends, len(df))
     counts = {name: len(ids) for name, ids in groups.items()}

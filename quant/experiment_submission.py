@@ -2,7 +2,7 @@ import importlib.metadata
 import shutil
 import uuid
 
-from . import engine, evaluation, factors, jobs, market, model_config, models, planning, policies, runs, storage, targets, triggers
+from . import event_inputs, engine, evaluation, factors, jobs, market, model_config, models, planning, runs, storage, targets, triggers
 from .feature_catalog import feature_records
 from .research_inputs import ExperimentIn
 
@@ -22,8 +22,6 @@ def submit(inp: ExperimentIn):
     model = next((m for m in models.registry() if m['id'] == inp.model), None)
     if not model or not model['available'] or target['task'] not in model['tasks']:
         raise ValueError('模型不可用或不支持当前目标')
-    if not inp.factor_ids and not inp.factor_set_id:
-        raise ValueError('至少选择一个因子或一个因子集')
     if inp.factor_ids and inp.factor_set_id:
         raise ValueError('请选择因子集或直接选择因子，二选一')
     if inp.factor_set_id:
@@ -32,12 +30,8 @@ def submit(inp: ExperimentIn):
     else:
         factor_set = None
         factor_ids = list(inp.factor_ids)
-    if not factor_ids:
-        raise ValueError('至少选择一个因子')
     if len(set(factor_ids)) != len(factor_ids):
         raise ValueError('因子不能重复')
-    if len(factor_ids) > 30:
-        raise ValueError('一次实验最多选择 30 个因子')
     factor_records = feature_records(factor_ids)
     if factor_set and factor_set.get('features'):
         frozen = {entry['instance_id']: entry for entry in factor_set['features']}
@@ -46,10 +40,14 @@ def submit(inp: ExperimentIn):
             if record['id'] in frozen else record
             for record in factor_records
         ]
+    event_features = event_inputs.freeze(inp.event_features)
+    event_inputs.validate_count(factor_records, event_features)
     planning.validate_features(factor_records, trigger)
     manifest = factors.build_manifest(factor_records)
     if factor_set and factor_set.get('manifest_hash') not in (None, manifest.hash):
         raise ValueError('因子集清单已变化，请重新保存因子集')
+    if event_features:
+        manifest = factors.build_manifest(factor_records, event_features)
     packages = {p: importlib.metadata.version(p) for p in ['numpy', 'pandas', 'scikit-learn']}
     for p in ['torch', 'lightgbm', 'xgboost']:
         try:
@@ -58,7 +56,6 @@ def submit(inp: ExperimentIn):
             pass
     config = {**inp.model_dump(), 'factor_ids': factor_ids,
               'trigger': trigger, 'sample_mode': sample_mode,
-              'auto_backtest': inp.auto_backtest and policies.supports_backtest(sample_mode, target['task']),
               'target_version': target['version'], 'target_params': target.get('params', {}),
               'model_params': model_config.resolve(inp.model, target['task'], inp.model_params)}
     snapshot = {
@@ -74,6 +71,10 @@ def submit(inp: ExperimentIn):
         'diagnostic_seeds': list(range(42, 42 + inp.diagnostic_runs)) if models.is_sequence(inp.model) else [42],
         'split': 'chronological 60/20/20; purge labels reaching next split; train-only scaling',
     }
+    if event_features:
+        snapshot['event_features'] = event_features
+        if any(feature['provider'] == 'chan' for feature in event_features):
+            snapshot['chan'] = triggers.chan_snapshot()
     snapshot['research_plan'] = planning.compile_plan(config, target)
     if triggers.source(trigger) == 'chan':
         config['event_types'] = trigger['rule']['params']['types']
